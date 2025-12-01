@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/ca
 import { Button } from "../../components/ui/button"
 import { Input } from "../../components/ui/input"
 import { Badge } from "../../components/ui/badge"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "../../components/ui/dialog"
 import { Mail, Key, Power, Trash2, FileText, Plus, X, Copy, Check, Eye } from "lucide-react"
 
 const db = createDB(Astro.locals.runtime.env.DB)
@@ -149,7 +150,8 @@ if (Astro.request.method === "POST") {
 }
 
 const filter = Astro.url.searchParams.get("filter")
-const mailboxes = await listMailboxes(db, { limit: 100, unassignedOnly: filter === "unassigned" })
+const serviceFilters = Astro.url.searchParams.getAll("service") // 服务筛选（多选）
+let mailboxes = await listMailboxes(db, { limit: 100, unassignedOnly: filter === "unassigned" })
 
 // 获取全局服务模板
 const serviceTemplates = await listServiceTemplates(db)
@@ -166,6 +168,20 @@ for (const mb of mailboxes) {
 // 获取所有邮箱的服务
 const servicesMap = await getMailboxServicesMap(db, mailboxes.map(mb => mb.address))
 
+// 根据服务筛选邮箱
+if (serviceFilters.length > 0) {
+  mailboxes = mailboxes.filter(mb => {
+    const services = servicesMap[mb.address] || []
+    // 检查是否包含任一选中的服务
+    return serviceFilters.some(filterId =>
+      services.some(s =>
+        s.templateId === filterId ||
+        (s.isCustom && s.name === filterId)
+      )
+    )
+  })
+}
+
 // 当前展开的邮箱（用于显示添加服务表单）
 const expandedMailbox = Astro.url.searchParams.get("expand")
 const addMode = Astro.url.searchParams.get("mode") // "template" 或 "custom"
@@ -176,19 +192,57 @@ const addMode = Astro.url.searchParams.get("mode") // "template" 或 "custom"
     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
       <h1 class="text-2xl md:text-3xl font-bold tracking-tight">邮箱管理</h1>
       <div class="flex flex-wrap gap-2">
-        <button id="batchDeleteBtn" class="hidden">
-          <Button variant="destructive" size="sm">
-            <Trash2 className="mr-2 h-4 w-4" />
-            删除选中 (<span id="selectedCount">0</span>)
-          </Button>
+        <button id="createMailboxBtn" type="button" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-green-600 hover:bg-green-700 text-white h-9 px-4">
+          <Plus className="mr-2 h-4 w-4" />
+          创建邮箱
         </button>
-        <a href="/admin/mailboxes">
-          <Button variant={!filter ? "default" : "outline"} size="sm">全部</Button>
-        </a>
-        <a href="/admin/mailboxes?filter=unassigned">
-          <Button variant={filter === "unassigned" ? "default" : "outline"} size="sm">未分配</Button>
-        </a>
+        <button id="batchDeleteBtn" class="hidden inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-destructive text-destructive-foreground hover:bg-destructive/90 h-9 px-4">
+          <Trash2 className="mr-2 h-4 w-4" />
+          删除选中 (<span id="selectedCount">0</span>)
+        </button>
       </div>
+    </div>
+
+    <!-- 筛选器 -->
+    <div class="flex flex-wrap gap-2 items-center">
+      <span class="text-sm text-muted-foreground">筛选：</span>
+      <a href="/admin/mailboxes">
+        <button type="button" class={`inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors h-8 px-3 ${!filter && serviceFilters.length === 0 ? "bg-primary text-primary-foreground" : "border border-input bg-background hover:bg-accent hover:text-accent-foreground"}`}>
+          全部
+        </button>
+      </a>
+      <a href="/admin/mailboxes?filter=unassigned">
+        <button type="button" class={`inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors h-8 px-3 ${filter === "unassigned" ? "bg-primary text-primary-foreground" : "border border-input bg-background hover:bg-accent hover:text-accent-foreground"}`}>
+          未分配
+        </button>
+      </a>
+
+      {serviceTemplates.length > 0 && (
+        <>
+          <span class="text-sm text-muted-foreground ml-2">服务：</span>
+          {serviceTemplates.map((tpl) => {
+            const isSelected = serviceFilters.includes(tpl.id)
+            const currentParams = new URLSearchParams(Astro.url.search)
+            if (isSelected) {
+              // 移除该服务筛选
+              const newServices = serviceFilters.filter(s => s !== tpl.id)
+              currentParams.delete("service")
+              newServices.forEach(s => currentParams.append("service", s))
+            } else {
+              // 添加该服务筛选
+              currentParams.append("service", tpl.id)
+            }
+            const newUrl = `/admin/mailboxes${currentParams.toString() ? "?" + currentParams.toString() : ""}`
+            return (
+              <a href={newUrl}>
+                <button type="button" class={`inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors h-8 px-3 ${isSelected ? "bg-primary text-primary-foreground" : "border border-input bg-background hover:bg-accent hover:text-accent-foreground"}`}>
+                  {tpl.name}
+                </button>
+              </a>
+            )
+          })}
+        </>
+      )}
     </div>
 
     {message && (
@@ -206,70 +260,6 @@ const addMode = Astro.url.searchParams.get("mode") // "template" 或 "custom"
         )}
       </div>
     )}
-
-    <div class="grid gap-6 md:grid-cols-2">
-      <!-- 自定义创建 -->
-      <Card>
-        <CardHeader>
-          <CardTitle>自定义创建邮箱</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {mailDomains.length === 0 ? (
-            <div class="bg-yellow-50 text-yellow-700 p-3 rounded">
-              请先在 <a href="/admin/settings" class="underline">系统设置</a> 中添加邮箱域名
-            </div>
-          ) : (
-            <form method="POST" class="space-y-4">
-              <input type="hidden" name="action" value="single_create" />
-              <div class="space-y-2">
-                <label class="text-sm font-medium leading-none">邮箱地址</label>
-                <div class="flex">
-                  <Input type="text" name="local_part" required placeholder="username" class="rounded-r-none" />
-                  <span class="px-3 py-2 bg-muted border-y border-r text-muted-foreground flex items-center">@</span>
-                  <select name="domain" class="px-3 py-2 border-y border-r rounded-r-md bg-background">
-                    {mailDomains.map((d) => <option value={d} selected={d === defaultDomain}>{d}</option>)}
-                  </select>
-                </div>
-              </div>
-              <div class="space-y-2">
-                <label class="text-sm font-medium leading-none">备注（可选）</label>
-                <Input type="text" name="note" placeholder="备注" />
-              </div>
-              <Button type="submit" className="w-full bg-green-600 hover:bg-green-700">创建</Button>
-            </form>
-          )}
-        </CardContent>
-      </Card>
-
-      <!-- 批量生成 -->
-      <Card>
-        <CardHeader>
-          <CardTitle>批量生成邮箱</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {mailDomains.length === 0 ? (
-            <div class="bg-yellow-50 text-yellow-700 p-3 rounded">
-              请先在 <a href="/admin/settings" class="underline">系统设置</a> 中添加邮箱域名
-            </div>
-          ) : (
-            <form method="POST" class="space-y-4">
-              <input type="hidden" name="action" value="batch_create" />
-              <div class="space-y-2">
-                <label class="text-sm font-medium leading-none">数量</label>
-                <Input type="number" name="count" value="10" min="1" max="100" />
-              </div>
-              <div class="space-y-2">
-                <label class="text-sm font-medium leading-none">域名</label>
-                <select name="domain" class="w-full px-3 py-2 border rounded-md bg-background">
-                  {mailDomains.map((d) => <option value={d} selected={d === defaultDomain}>{d}</option>)}
-                </select>
-              </div>
-              <Button type="submit" className="w-full">批量生成</Button>
-            </form>
-          )}
-        </CardContent>
-      </Card>
-    </div>
 
     <!-- 邮箱列表 -->
     <Card>
@@ -552,9 +542,148 @@ const addMode = Astro.url.searchParams.get("mode") // "template" 或 "custom"
         )}
       </div>
     </Card>
+
+    <!-- 创建邮箱 Modal -->
+    <div id="createMailboxModal" class="fixed inset-0 z-50 hidden items-center justify-center">
+      <!-- Backdrop -->
+      <div class="fixed inset-0 bg-black/50" id="modalBackdrop"></div>
+
+      <!-- Dialog -->
+      <div class="relative z-50 w-full max-w-lg rounded-lg border bg-background p-6 shadow-lg max-h-[90vh] overflow-y-auto mx-4">
+        <!-- Close button -->
+        <button
+          type="button"
+          id="closeModalBtn"
+          class="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+        >
+          <X className="h-4 w-4" />
+          <span class="sr-only">关闭</span>
+        </button>
+
+        <!-- Dialog Header -->
+        <div class="flex flex-col space-y-1.5 text-center sm:text-left mb-4">
+          <h2 class="text-lg font-semibold leading-none tracking-tight">创建邮箱</h2>
+        </div>
+
+        {mailDomains.length === 0 ? (
+          <div class="bg-yellow-50 text-yellow-700 p-3 rounded">
+            请先在 <a href="/admin/settings" class="underline">系统设置</a> 中添加邮箱域名
+          </div>
+        ) : (
+          <>
+            <!-- 模式切换 -->
+            <div class="flex gap-2 mb-4">
+              <button
+                type="button"
+                id="singleModeBtn"
+                class="flex-1 inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors h-9 px-4 bg-primary text-primary-foreground"
+              >
+                单个创建
+              </button>
+              <button
+                type="button"
+                id="batchModeBtn"
+                class="flex-1 inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors h-9 px-4 border border-input bg-background hover:bg-accent hover:text-accent-foreground"
+              >
+                批量生成
+              </button>
+            </div>
+
+            <!-- 单个创建表单 -->
+            <form method="POST" id="singleCreateForm" class="space-y-4">
+              <input type="hidden" name="action" value="single_create" />
+              <div class="space-y-2">
+                <label class="text-sm font-medium leading-none">邮箱地址</label>
+                <div class="flex">
+                  <input type="text" name="local_part" required placeholder="username" class="flex h-10 w-full rounded-l-md border border-r-0 border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50" />
+                  <span class="px-3 py-2 bg-muted border-y border-input text-muted-foreground flex items-center">@</span>
+                  <select name="domain" class="px-3 py-2 border-y border-r border-input rounded-r-md bg-background">
+                    {mailDomains.map((d) => <option value={d} selected={d === defaultDomain}>{d}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div class="space-y-2">
+                <label class="text-sm font-medium leading-none">备注（可选）</label>
+                <input type="text" name="note" placeholder="备注" class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50" />
+              </div>
+              <button type="submit" class="w-full inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-green-600 hover:bg-green-700 text-white h-10 px-4 py-2">创建</button>
+            </form>
+
+            <!-- 批量生成表单 -->
+            <form method="POST" id="batchCreateForm" class="space-y-4 hidden">
+              <input type="hidden" name="action" value="batch_create" />
+              <div class="space-y-2">
+                <label class="text-sm font-medium leading-none">数量</label>
+                <input type="number" name="count" value="10" min="1" max="100" class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50" />
+              </div>
+              <div class="space-y-2">
+                <label class="text-sm font-medium leading-none">域名</label>
+                <select name="domain" class="w-full h-10 px-3 py-2 border border-input rounded-md bg-background">
+                  {mailDomains.map((d) => <option value={d} selected={d === defaultDomain}>{d}</option>)}
+                </select>
+              </div>
+              <button type="submit" class="w-full inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-primary text-primary-foreground hover:bg-primary/90 h-10 px-4 py-2">批量生成</button>
+            </form>
+          </>
+        )}
+      </div>
+    </div>
   </div>
 
   <script>
+    // Modal 控制
+    const createMailboxBtn = document.getElementById('createMailboxBtn')
+    const createMailboxModal = document.getElementById('createMailboxModal')
+    const closeModalBtn = document.getElementById('closeModalBtn')
+    const modalBackdrop = document.getElementById('modalBackdrop')
+    const singleModeBtn = document.getElementById('singleModeBtn')
+    const batchModeBtn = document.getElementById('batchModeBtn')
+    const singleCreateForm = document.getElementById('singleCreateForm')
+    const batchCreateForm = document.getElementById('batchCreateForm')
+
+    // 打开 Modal
+    createMailboxBtn?.addEventListener('click', () => {
+      createMailboxModal?.classList.remove('hidden')
+      createMailboxModal?.classList.add('flex')
+      document.body.style.overflow = 'hidden'
+    })
+
+    // 关闭 Modal
+    const closeModal = () => {
+      createMailboxModal?.classList.add('hidden')
+      createMailboxModal?.classList.remove('flex')
+      document.body.style.overflow = ''
+    }
+
+    closeModalBtn?.addEventListener('click', closeModal)
+    modalBackdrop?.addEventListener('click', closeModal)
+
+    // ESC 键关闭 Modal
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && createMailboxModal && !createMailboxModal.classList.contains('hidden')) {
+        closeModal()
+      }
+    })
+
+    // 模式切换
+    singleModeBtn?.addEventListener('click', () => {
+      singleModeBtn?.classList.remove('border', 'border-input', 'bg-background', 'hover:bg-accent', 'hover:text-accent-foreground')
+      singleModeBtn?.classList.add('bg-primary', 'text-primary-foreground')
+      batchModeBtn?.classList.remove('bg-primary', 'text-primary-foreground')
+      batchModeBtn?.classList.add('border', 'border-input', 'bg-background', 'hover:bg-accent', 'hover:text-accent-foreground')
+      singleCreateForm?.classList.remove('hidden')
+      batchCreateForm?.classList.add('hidden')
+    })
+
+    batchModeBtn?.addEventListener('click', () => {
+      batchModeBtn?.classList.remove('border', 'border-input', 'bg-background', 'hover:bg-accent', 'hover:text-accent-foreground')
+      batchModeBtn?.classList.add('bg-primary', 'text-primary-foreground')
+      singleModeBtn?.classList.remove('bg-primary', 'text-primary-foreground')
+      singleModeBtn?.classList.add('border', 'border-input', 'bg-background', 'hover:bg-accent', 'hover:text-accent-foreground')
+      batchCreateForm?.classList.remove('hidden')
+      singleCreateForm?.classList.add('hidden')
+    })
+
     // 复制密码功能
     const copyPasswordBtn = document.getElementById('copyPasswordBtn')
     const generatedPasswordDiv = document.getElementById('generatedPassword')
