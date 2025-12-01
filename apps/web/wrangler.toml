@@ -1,0 +1,16 @@
+name = "xmail"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+pages_build_output_dir = "./dist"
+
+[observability]
+enabled = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "xmail-db"
+database_id = "90dd129e-65d0-48b6-afa9-17a79e1f27cc"
+
+[vars]
+MAIL_DOMAIN = "example.com"  # 替换为你的域名
+# JWT_SECRET 和 ADMIN_PASSWORD 应在 dashboard 中设置为 secrets

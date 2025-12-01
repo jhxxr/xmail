@@ -1,0 +1,167 @@
+---
+import AdminLayout from "../../layouts/AdminLayout.astro"
+import { createDB, getAdminById, listServiceTemplates, getServiceTemplate, createServiceTemplate, deleteServiceTemplate, updateServiceTemplate, createLog } from "database"
+import { verifyToken } from "../../lib/auth"
+import { formatDate } from "../../lib/utils"
+import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
+import { Button } from "../../components/ui/button"
+import { Input } from "../../components/ui/input"
+import { Badge } from "../../components/ui/badge"
+import { Plus, Trash2, Edit, ExternalLink } from "lucide-react"
+
+const db = createDB(Astro.locals.runtime.env.DB)
+const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
+
+// 验证登录
+const token = Astro.cookies.get("admin_token")?.value
+if (!token) return Astro.redirect("/admin/login")
+const payload = await verifyToken(token, jwtSecret)
+if (!payload || payload.type !== "admin") return Astro.redirect("/admin/login")
+const admin = await getAdminById(db, payload.id)
+if (!admin) return Astro.redirect("/admin/login")
+
+let message = ""
+let messageType: "success" | "error" = "success"
+
+// 处理表单
+if (Astro.request.method === "POST") {
+  const formData = await Astro.request.formData()
+  const action = formData.get("action")?.toString()
+
+  if (action === "create") {
+    const name = formData.get("name")?.toString()?.trim()
+    const loginUrl = formData.get("login_url")?.toString()?.trim()
+    const note = formData.get("note")?.toString()?.trim()
+
+    if (name && loginUrl) {
+      await createServiceTemplate(db, { name, loginUrl, note })
+      await createLog(db, { adminId: admin.id, action: "create_service_template", details: { name, loginUrl } })
+      message = `服务 ${name} 创建成功`
+      messageType = "success"
+    }
+  } else if (action === "update") {
+    const id = formData.get("id")?.toString()
+    const name = formData.get("name")?.toString()?.trim()
+    const loginUrl = formData.get("login_url")?.toString()?.trim()
+    const note = formData.get("note")?.toString()?.trim()
+
+    if (id && name && loginUrl) {
+      await updateServiceTemplate(db, id, { name, loginUrl, note })
+      await createLog(db, { adminId: admin.id, action: "update_service_template", target: id, details: { name, loginUrl } })
+      message = `服务 ${name} 更新成功`
+      messageType = "success"
+    }
+  } else if (action === "delete") {
+    const id = formData.get("id")?.toString()
+    if (id) {
+      await deleteServiceTemplate(db, id)
+      await createLog(db, { adminId: admin.id, action: "delete_service_template", target: id })
+      message = "服务已删除"
+      messageType = "success"
+    }
+  }
+}
+
+const templates = await listServiceTemplates(db)
+const showCreateForm = Astro.url.searchParams.get("action") === "create"
+const editId = Astro.url.searchParams.get("id")
+const showEditForm = Astro.url.searchParams.get("action") === "edit" && editId
+const editingService = showEditForm ? await getServiceTemplate(db, editId) : null
+---
+
+<AdminLayout title="服务管理">
+  <div class="space-y-6">
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+      <h1 class="text-2xl md:text-3xl font-bold tracking-tight">服务管理</h1>
+      <a href={(showCreateForm || showEditForm) ? "/admin/services" : "/admin/services?action=create"}>
+        <Button size="sm">
+          {(showCreateForm || showEditForm) ? "返回列表" : <><Plus className="mr-2 h-4 w-4" /> 添加服务</>}
+        </Button>
+      </a>
+    </div>
+
+    {message && (
+      <div class={`p-4 rounded-md border ${messageType === "success" ? "bg-green-50 text-green-900 border-green-200" : "bg-red-50 text-red-900 border-red-200"}`}>
+        {message}
+      </div>
+    )}
+
+    {(showCreateForm || showEditForm) && (
+      <Card>
+        <CardHeader>
+          <CardTitle>{showEditForm ? "编辑服务" : "添加新服务"}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form method="POST" class="space-y-4 max-w-lg">
+            <input type="hidden" name="action" value={showEditForm ? "update" : "create"} />
+            {showEditForm && <input type="hidden" name="id" value={editingService?.id} />}
+            <div class="space-y-2">
+              <label class="text-sm font-medium leading-none">服务名称 *</label>
+              <Input type="text" name="name" required placeholder="如: Twitter" value={editingService?.name || ""} />
+            </div>
+            <div class="space-y-2">
+              <label class="text-sm font-medium leading-none">登录链接 *</label>
+              <Input type="url" name="login_url" required placeholder="https://twitter.com/login" value={editingService?.loginUrl || ""} />
+            </div>
+            <div class="space-y-2">
+              <label class="text-sm font-medium leading-none">备注</label>
+              <Input type="text" name="note" placeholder="备注" value={editingService?.note || ""} />
+            </div>
+            <button type="submit" class="inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/90 h-10 px-4 py-2">
+              {showEditForm ? "保存修改" : "创建服务"}
+            </button>
+          </form>
+        </CardContent>
+      </Card>
+    )}
+
+    <Card>
+      <div class="relative w-full overflow-auto">
+        <table class="w-full caption-bottom text-sm">
+          <thead class="[&_tr]:border-b">
+            <tr class="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted">
+              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">服务名称</th>
+              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">登录链接</th>
+              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">备注</th>
+              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">创建时间</th>
+              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">操作</th>
+            </tr>
+          </thead>
+          <tbody class="[&_tr:last-child]:border-0">
+            {templates.length === 0 ? (
+              <tr><td colspan="5" class="p-4 text-center text-muted-foreground">暂无服务模板</td></tr>
+            ) : (
+              templates.map((tpl) => (
+                <tr class="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted">
+                  <td class="p-4 align-middle font-medium">{tpl.name}</td>
+                  <td class="p-4 align-middle">
+                    <a href={tpl.loginUrl} target="_blank" rel="noopener noreferrer" class="text-primary hover:underline inline-flex items-center gap-1 text-sm">
+                      {tpl.loginUrl}
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  </td>
+                  <td class="p-4 align-middle text-muted-foreground text-sm">{tpl.note || "-"}</td>
+                  <td class="p-4 align-middle text-muted-foreground text-sm">{formatDate(tpl.createdAt)}</td>
+                  <td class="p-4 align-middle">
+                    <div class="flex gap-2">
+                      <a href={`/admin/services?action=edit&id=${tpl.id}`} class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-8 w-8" title="编辑">
+                        <Edit className="h-4 w-4" />
+                      </a>
+                      <form method="POST" class="inline" onsubmit="return confirm('确定删除？关联此服务的邮箱绑定也会被删除。')">
+                        <input type="hidden" name="action" value="delete" />
+                        <input type="hidden" name="id" value={tpl.id} />
+                        <button type="submit" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-8 w-8 text-destructive hover:text-destructive" title="删除">
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </form>
+                    </div>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  </div>
+</AdminLayout>

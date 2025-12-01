@@ -1,0 +1,24 @@
+{
+  "name": "database",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./schema": "./schema.ts",
+    "./dao": "./dao.ts"
+  },
+  "scripts": {
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.44.2",
+    "nanoid": "^5.1.5"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250528.0",
+    "drizzle-kit": "^0.31.1",
+    "typescript": "^5.9.2"
+  }
+}

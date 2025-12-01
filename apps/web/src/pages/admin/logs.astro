@@ -1,0 +1,127 @@
+---
+import AdminLayout from "../../layouts/AdminLayout.astro"
+import { createDB, getLogs, getAdminById } from "database"
+import { verifyToken } from "../../lib/auth"
+import { formatDate } from "../../lib/utils"
+import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
+import { Badge } from "../../components/ui/badge"
+
+const db = createDB(Astro.locals.runtime.env.DB)
+const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
+
+// 验证登录
+const token = Astro.cookies.get("admin_token")?.value
+if (!token) {
+  return Astro.redirect("/admin/login")
+}
+
+const payload = await verifyToken(token, jwtSecret)
+if (!payload || payload.type !== "admin") {
+  return Astro.redirect("/admin/login")
+}
+
+// 获取日志
+const logs = await getLogs(db, { limit: 200 })
+
+// 操作类型映射
+const actionLabels: Record<string, string> = {
+  create_mailbox: "创建邮箱",
+  delete_mailbox: "删除邮箱",
+  enable_mailbox: "启用邮箱",
+  disable_mailbox: "禁用邮箱",
+  create_api_key: "创建 API Key",
+  delete_api_key: "删除 API Key",
+  enable_api_key: "启用 API Key",
+  disable_api_key: "禁用 API Key",
+  create_user: "创建用户",
+  delete_user: "删除用户",
+  enable_user: "启用用户",
+  disable_user: "禁用用户",
+  assign_mailboxes: "分配邮箱",
+  unassign_mailbox: "取消分配",
+  add_mail_domain: "添加域名",
+  remove_mail_domain: "删除域名",
+  set_default_domain: "设置默认域名",
+  set_retention_days: "设置保留天数",
+  cleanup_emails: "清理邮件",
+  set_mailbox_password: "设置邮箱密码",
+  batch_create_mailbox: "批量创建邮箱",
+}
+
+const actionVariants: Record<string, "default" | "secondary" | "destructive" | "outline" | "success" | "warning"> = {
+  create_mailbox: "success",
+  delete_mailbox: "destructive",
+  enable_mailbox: "default",
+  disable_mailbox: "warning",
+  create_api_key: "success",
+  delete_api_key: "destructive",
+  enable_api_key: "default",
+  disable_api_key: "warning",
+  create_user: "success",
+  delete_user: "destructive",
+  enable_user: "default",
+  disable_user: "warning",
+  assign_mailboxes: "default",
+  unassign_mailbox: "secondary",
+  add_mail_domain: "success",
+  remove_mail_domain: "destructive",
+  set_default_domain: "default",
+  set_retention_days: "secondary",
+  cleanup_emails: "warning",
+  set_mailbox_password: "secondary",
+  batch_create_mailbox: "success",
+}
+---
+
+<AdminLayout title="操作日志">
+  <div class="space-y-6">
+    <h1 class="text-3xl font-bold tracking-tight">操作日志</h1>
+
+    <Card>
+      <div class="relative w-full overflow-auto">
+        <table class="w-full caption-bottom text-sm">
+          <thead class="[&_tr]:border-b">
+            <tr class="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted">
+              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">时间</th>
+              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">操作</th>
+              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">目标</th>
+              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">详情</th>
+            </tr>
+          </thead>
+          <tbody class="[&_tr:last-child]:border-0">
+            {logs.length === 0 ? (
+              <tr>
+                <td colspan="4" class="p-4 text-center text-muted-foreground">
+                  暂无操作日志
+                </td>
+              </tr>
+            ) : (
+              logs.map((log) => (
+                <tr class="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted">
+                  <td class="p-4 align-middle text-muted-foreground whitespace-nowrap">
+                    {formatDate(log.createdAt)}
+                  </td>
+                  <td class="p-4 align-middle">
+                    <Badge variant={actionVariants[log.action] || "secondary"}>
+                      {actionLabels[log.action] || log.action}
+                    </Badge>
+                  </td>
+                  <td class="p-4 align-middle font-mono text-sm">
+                    {log.target || "-"}
+                  </td>
+                  <td class="p-4 align-middle text-muted-foreground">
+                    {log.details ? (
+                      <code class="relative rounded bg-muted px-[0.3rem] py-[0.2rem] font-mono text-xs font-semibold">
+                        {typeof log.details === 'string' ? log.details : JSON.stringify(log.details)}
+                      </code>
+                    ) : "-"}
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  </div>
+</AdminLayout>

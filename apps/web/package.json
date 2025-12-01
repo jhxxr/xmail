@@ -1,0 +1,35 @@
+{
+  "name": "web",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "deploy": "astro build && wrangler pages deploy dist"
+  },
+  "dependencies": {
+    "@astrojs/cloudflare": "^12.6.9",
+    "@astrojs/react": "^4.4.0",
+    "@tanstack/react-query": "^5.90.2",
+    "astro": "^5.14.1",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "database": "workspace:*",
+    "jose": "^6.1.0",
+    "lucide-react": "^0.511.0",
+    "nanoid": "^5.1.5",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "tailwind-merge": "^3.3.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250528.0",
+    "@tailwindcss/vite": "^4.1.14",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "tailwindcss": "^4.1.14",
+    "typescript": "^5.9.2",
+    "wrangler": "^4.18.0"
+  }
+}

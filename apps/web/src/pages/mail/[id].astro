@@ -1,0 +1,157 @@
+---
+import Layout from "../../layouts/Layout.astro"
+import { createDB, getEmail, getMailbox, markEmailAsRead, listMailboxes, getUserByToken } from "database"
+import { verifyToken } from "../../lib/auth"
+import { formatDate } from "../../lib/utils"
+
+const db = createDB(Astro.locals.runtime.env.DB)
+const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
+
+// 验证登录
+const token = Astro.cookies.get("user_token")?.value
+if (!token) {
+  return Astro.redirect("/")
+}
+
+const payload = await verifyToken(token, jwtSecret)
+if (!payload?.type || payload.type !== "user") {
+  Astro.cookies.delete("user_token", { path: "/" })
+  return Astro.redirect("/")
+}
+
+// 获取邮件
+const emailId = Astro.params.id
+if (!emailId) {
+  return Astro.redirect("/")
+}
+
+const email = await getEmail(db, emailId)
+if (!email) {
+  return Astro.redirect("/")
+}
+
+// 验证邮件属于当前用户的邮箱
+let hasAccess = false
+if (payload.mailbox) {
+  // 密码登录：直接检查邮箱地址
+  hasAccess = email.mailboxAddress === payload.mailbox
+} else if (payload.id) {
+  // Token 登录：检查邮箱是否属于该用户
+  const mailbox = await getMailbox(db, email.mailboxAddress)
+  hasAccess = mailbox?.userId === payload.id
+}
+
+if (!hasAccess) {
+  return Astro.redirect("/")
+}
+
+// 标记为已读
+if (!email.isRead) {
+  await markEmailAsRead(db, emailId)
+}
+
+// 安全处理 HTML
+function sanitizeHtml(html: string): string {
+  // 移除危险标签
+  let safe = html
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
+    .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, "")
+    .replace(/<form\b[^<]*(?:(?!<\/form>)<[^<]*)*<\/form>/gi, "")
+    .replace(/<object\b[^<]*(?:(?!<\/object>)<[^<]*)*<\/object>/gi, "")
+    .replace(/<embed\b[^>]*>/gi, "")
+
+  // 移除事件处理器
+  safe = safe.replace(/\s+on\w+\s*=\s*["'][^"']*["']/gi, "")
+  safe = safe.replace(/\s+on\w+\s*=\s*[^\s>]+/gi, "")
+
+  // 移除危险协议
+  safe = safe.replace(/href\s*=\s*["']javascript:[^"']*["']/gi, 'href="#"')
+  safe = safe.replace(/src\s*=\s*["']javascript:[^"']*["']/gi, "")
+
+  // 为所有链接添加 target="_blank" 和 rel="noopener"
+  safe = safe.replace(/<a\s+([^>]*href=)/gi, '<a target="_blank" rel="noopener noreferrer" $1')
+
+  return safe
+}
+---
+
+<Layout title={email.subject || "邮件详情"}>
+  <div class="min-h-screen bg-gray-50">
+    <!-- 顶部导航 -->
+    <header class="bg-white shadow">
+      <div class="max-w-4xl mx-auto px-4 py-4 flex items-center gap-4">
+        <a
+          href="/"
+          class="text-gray-500 hover:text-gray-700"
+        >
+          ← 返回
+        </a>
+        <span class="text-gray-300">|</span>
+        <span class="text-sm text-gray-500">{email.mailboxAddress}</span>
+      </div>
+    </header>
+
+    <!-- 邮件内容 -->
+    <main class="max-w-4xl mx-auto px-4 py-6">
+      <div class="bg-white rounded-lg shadow">
+        <!-- 邮件头 -->
+        <div class="px-6 py-4 border-b">
+          <h1 class="text-xl font-bold mb-4">
+            {email.subject || "(无主题)"}
+          </h1>
+          <div class="space-y-2 text-sm">
+            <div class="flex">
+              <span class="w-16 text-gray-500">发件人</span>
+              <span>
+                {email.fromName && <span class="font-medium">{email.fromName}</span>}
+                <span class="text-gray-500 ml-1">&lt;{email.fromAddress}&gt;</span>
+              </span>
+            </div>
+            <div class="flex">
+              <span class="w-16 text-gray-500">收件人</span>
+              <span>{email.messageTo}</span>
+            </div>
+            <div class="flex">
+              <span class="w-16 text-gray-500">时间</span>
+              <span>{email.date || formatDate(email.createdAt)}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 邮件正文 -->
+        <div class="px-6 py-4">
+          {email.html ? (
+            <div
+              class="prose max-w-none"
+              set:html={sanitizeHtml(email.html)}
+            />
+          ) : email.text ? (
+            <pre class="whitespace-pre-wrap font-sans text-gray-700">{email.text}</pre>
+          ) : (
+            <p class="text-gray-500">(无内容)</p>
+          )}
+        </div>
+      </div>
+    </main>
+  </div>
+</Layout>
+
+<style>
+  /* 邮件内容样式 */
+  .prose img {
+    max-width: 100%;
+    height: auto;
+  }
+  .prose a {
+    color: #2563eb;
+    text-decoration: underline;
+  }
+  .prose table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  .prose td, .prose th {
+    border: 1px solid #e5e7eb;
+    padding: 0.5rem;
+  }
+</style>
