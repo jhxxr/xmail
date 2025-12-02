@@ -1,7 +1,7 @@
 ---
 import { MailboxInfo } from "./MailboxInfo"
 import { ServiceList } from "./ServiceList"
-import { LogOut, Trash2, Inbox as InboxIcon, Star } from "lucide-react"
+import { LogOut, Trash2, Inbox as InboxIcon, Star, Mail, ChevronLeft } from "lucide-react"
 import { Button } from "../ui/button"
 
 interface Props {
@@ -17,35 +17,25 @@ const mailboxParam = Astro.url.searchParams.get("mailbox")
 ---
 
 <aside class="w-80 flex-shrink-0 border-r bg-muted/10 min-h-screen flex flex-col">
-  <div class="p-6 space-y-6 flex-1 overflow-y-auto">
-    <!-- 邮箱选择器 -->
-    {mailboxes.length > 1 && (
-      <div class="space-y-2">
-        <label class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-          切换账号
-        </label>
-        <div class="relative">
-          <select
-            class="w-full h-11 rounded-lg border-2 border-primary/20 bg-background px-4 py-2 text-sm font-medium ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:border-primary appearance-none cursor-pointer hover:border-primary/40 transition-colors"
-            onchange="window.location.href='/?mailbox='+this.value"
-          >
-            {mailboxes.map((m) => (
-              <option value={m.address} selected={m.address === selectedMailbox}>
-                {m.address}
-              </option>
-            ))}
-          </select>
-          <div class="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none text-muted-foreground">
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-            </svg>
-          </div>
-        </div>
+  <!-- App Title -->
+  <div class="px-6 pt-6 pb-2">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-2 text-primary">
+        <Mail className="h-6 w-6" />
+        <h1 class="text-xl font-bold tracking-tight">XMail</h1>
       </div>
-    )}
+      {mailboxes.length > 1 && (
+        <a href="/mailboxes" class="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors">
+          <ChevronLeft className="h-4 w-4" />
+          <span>返回</span>
+        </a>
+      )}
+    </div>
+  </div>
 
+  <div class="p-6 space-y-6 flex-1 overflow-y-auto">
     <!-- 邮箱信息卡片 -->
-    <MailboxInfo client:load address={selectedMailbox} stats={stats} />
+    <MailboxInfo client:load address={selectedMailbox} stats={stats} mailboxes={mailboxes} />
 
     <!-- 邮件筛选 -->
     <div class="space-y-1">

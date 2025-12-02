@@ -1,7 +1,7 @@
 ---
 import { MailboxInfo } from "./MailboxInfo"
 import { ServiceList } from "./ServiceList"
-import { LogOut, Mail, Trash2, Inbox as InboxIcon, Star } from "lucide-react"
+import { LogOut, Mail, Trash2, Inbox as InboxIcon, Star, ChevronLeft } from "lucide-react"
 
 interface Props {
   mailboxes: any[]
@@ -25,22 +25,17 @@ const currentFilter = Astro.url.searchParams.get("filter")
         <span class="font-bold text-lg">XMail</span>
       </div>
 
-      <!-- Mailbox Selector (if multiple mailboxes) -->
-      {mailboxes.length > 1 && (
-        <select
-          class="flex-1 h-10 rounded-lg border-2 border-primary/20 bg-background px-3 text-sm font-medium ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary appearance-none cursor-pointer hover:border-primary/40 transition-colors"
-          onchange="window.location.href='/?mailbox='+this.value"
-        >
-          {mailboxes.map((m) => (
-            <option value={m.address} selected={m.address === selectedMailbox}>
-              {m.address.length > 20 ? m.address.substring(0, 20) + '...' : m.address}
-            </option>
-          ))}
-        </select>
-      )}
+      <div class="flex-1" />
 
-      <!-- Spacer for single mailbox -->
-      {mailboxes.length === 1 && <div class="flex-1" />}
+      <!-- Back Button (if multiple mailboxes) -->
+      {mailboxes.length > 1 && (
+        <a href="/mailboxes" class="flex-shrink-0">
+          <button class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-9 px-3 gap-1">
+            <ChevronLeft class="h-4 w-4" />
+            <span class="text-xs">返回</span>
+          </button>
+        </a>
+      )}
 
       <!-- Logout Button -->
       <a href="/logout" class="flex-shrink-0">
@@ -54,7 +49,7 @@ const currentFilter = Astro.url.searchParams.get("filter")
   <!-- Main Content Area -->
   <div class="p-4 space-y-4">
     <!-- Mailbox Info Card -->
-    <MailboxInfo client:load address={selectedMailbox} stats={stats} />
+    <MailboxInfo client:load address={selectedMailbox} stats={stats} mailboxes={mailboxes} />
 
     <!-- 邮件筛选 -->
     <div class="flex gap-2">
