@@ -8,6 +8,7 @@ import { Button } from "../../components/ui/button"
 import { Input } from "../../components/ui/input"
 import { Badge } from "../../components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "../../components/ui/dialog"
+import { ServiceManager } from "../../components/admin/ServiceManager"
 import { Mail, Power, Trash2, FileText, Plus, X, Copy, Check, Eye } from "lucide-react"
 
 const db = createDB(Astro.locals.runtime.env.DB)
@@ -174,10 +175,6 @@ if (serviceFilters.length > 0) {
     )
   })
 }
-
-// 当前展开的邮箱（用于显示添加服务表单）
-const expandedMailbox = Astro.url.searchParams.get("expand")
-const addMode = Astro.url.searchParams.get("mode") // "template" 或 "custom"
 ---
 
 <AdminLayout title="邮箱管理">
@@ -186,15 +183,15 @@ const addMode = Astro.url.searchParams.get("mode") // "template" 或 "custom"
       <h1 class="text-2xl md:text-3xl font-bold tracking-tight">邮箱管理</h1>
       <div class="flex flex-wrap gap-2">
         <button id="createMailboxBtn" type="button" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-green-600 hover:bg-green-700 text-white h-9 px-4">
-          <Plus className="mr-2 h-4 w-4" />
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2 h-4 w-4"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
           创建邮箱
         </button>
         <button id="exportSelectedBtn" class="hidden inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-blue-600 text-white hover:bg-blue-700 h-9 px-4">
-          <Copy className="mr-2 h-4 w-4" />
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2 h-4 w-4"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
           导出选中 (<span id="exportCount">0</span>)
         </button>
         <button id="batchDeleteBtn" class="hidden inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-destructive text-destructive-foreground hover:bg-destructive/90 h-9 px-4">
-          <Trash2 className="mr-2 h-4 w-4" />
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2 h-4 w-4"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
           删除选中 (<span id="selectedCount">0</span>)
         </button>
       </div>
@@ -307,12 +304,6 @@ const addMode = Astro.url.searchParams.get("mode") // "template" 或 "custom"
             ) : (
               mailboxes.map((mb) => {
                 const services = servicesMap[mb.address] || []
-                const isExpanded = expandedMailbox === mb.address
-                const addServiceParams = new URLSearchParams(Astro.url.search)
-                addServiceParams.set("expand", mb.address)
-                addServiceParams.delete("mode")
-                const addServiceQuery = addServiceParams.toString()
-                const addServiceUrl = `/admin/mailboxes${addServiceQuery ? "?" + addServiceQuery : ""}`
                 return (
                   <>
                     <tr class={`border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted ${!mb.isActive ? "opacity-60" : ""}`}>
@@ -321,30 +312,12 @@ const addMode = Astro.url.searchParams.get("mode") // "template" 或 "custom"
                       </td>
                       <td class="p-4 align-middle font-mono">{mb.address}</td>
                       <td class="p-4 align-middle">
-                        <div class="space-y-2">
-                          {services.length > 0 ? (
-                            <div class="flex flex-wrap gap-1">
-                              {services.map((service) => (
-                                <Badge
-                                  variant={service.isCustom ? "secondary" : "outline"}
-                                  className="text-xs"
-                                >
-                                  {service.name}
-                                </Badge>
-                              ))}
-                            </div>
-                          ) : (
-                            <span class="text-sm text-muted-foreground">未关联服务</span>
-                          )}
-                          <a
-                            href={addServiceUrl}
-                            class={`inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors h-7 px-2 ${isExpanded ? "bg-primary text-primary-foreground" : "border border-dashed border-input text-muted-foreground hover:bg-accent hover:text-accent-foreground"}`}
-                            title="添加关联服务"
-                          >
-                            <Plus className="h-3 w-3 mr-1" />
-                            添加
-                          </a>
-                        </div>
+                        <ServiceManager
+                          client:load
+                          mailbox={mb.address}
+                          initialServices={services}
+                          templates={serviceTemplates}
+                        />
                       </td>
                       <td class="p-4 align-middle">
                         {mb.userId ? (
@@ -396,71 +369,6 @@ const addMode = Astro.url.searchParams.get("mode") // "template" 或 "custom"
                         </div>
                       </td>
                     </tr>
-                    {isExpanded && (
-                      <tr class="bg-muted/30">
-                        <td colspan="7" class="p-4">
-                          <div class="space-y-3 max-w-3xl">
-                            <div class="flex gap-2">
-                              <a href={`/admin/mailboxes?${filter ? `filter=${filter}&` : ''}expand=${mb.address}&mode=template`}>
-                                <Button variant={addMode === "template" || !addMode ? "default" : "outline"} size="sm">选择全局服务</Button>
-                              </a>
-                              <a href={`/admin/mailboxes?${filter ? `filter=${filter}&` : ''}expand=${mb.address}&mode=custom`}>
-                                <Button variant={addMode === "custom" ? "default" : "outline"} size="sm">创建临时服务</Button>
-                              </a>
-                            </div>
-
-                            {(addMode === "template" || !addMode) && (
-                              <form method="POST" class="flex gap-2 items-end">
-                                <input type="hidden" name="action" value="add_template_service" />
-                                <input type="hidden" name="address" value={mb.address} />
-                                <div class="flex-1">
-                                  <label class="text-xs font-medium text-muted-foreground">选择服务 *</label>
-                                  <select name="template_id" required class="w-full h-9 px-3 border rounded-md bg-background text-sm">
-                                    <option value="">-- 请选择 --</option>
-                                    {serviceTemplates.map((tpl) => (
-                                      <option value={tpl.id}>{tpl.name} ({tpl.loginUrl})</option>
-                                    ))}
-                                  </select>
-                                </div>
-                                <Button type="submit" size="sm">关联</Button>
-                                <a href={`/admin/mailboxes${filter ? `?filter=${filter}` : ''}`}>
-                                  <Button type="button" variant="ghost" size="sm">取消</Button>
-                                </a>
-                              </form>
-                            )}
-
-                            {addMode === "custom" && (
-                              <form method="POST" class="flex gap-2 items-end">
-                                <input type="hidden" name="action" value="add_custom_service" />
-                                <input type="hidden" name="address" value={mb.address} />
-                                <div class="flex-1">
-                                  <label class="text-xs font-medium text-muted-foreground">服务名称 *</label>
-                                  <Input type="text" name="service_name" required placeholder="如: Twitter" class="h-9" />
-                                </div>
-                                <div class="flex-1">
-                                  <label class="text-xs font-medium text-muted-foreground">登录链接 *</label>
-                                  <Input type="url" name="service_login_url" required placeholder="https://twitter.com/login" class="h-9" />
-                                </div>
-                                <div class="flex-1">
-                                  <label class="text-xs font-medium text-muted-foreground">备注</label>
-                                  <Input type="text" name="service_note" placeholder="备注" class="h-9" />
-                                </div>
-                                <Button type="submit" size="sm">添加</Button>
-                                <a href={`/admin/mailboxes${filter ? `?filter=${filter}` : ''}`}>
-                                  <Button type="button" variant="ghost" size="sm">取消</Button>
-                                </a>
-                              </form>
-                            )}
-
-                            {serviceTemplates.length === 0 && (addMode === "template" || !addMode) && (
-                              <div class="text-sm text-muted-foreground bg-yellow-50 text-yellow-700 p-3 rounded">
-                                暂无全局服务模板，请先在 <a href="/admin/services" class="underline">服务管理</a> 中添加
-                              </div>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    )}
                   </>
                 )
               })
@@ -500,18 +408,15 @@ const addMode = Astro.url.searchParams.get("mode") // "template" 或 "custom"
                   </div>
                 </div>
 
-                {services.length > 0 && (
-                  <div class="flex flex-wrap gap-1">
-                    {services.map((s) => (
-                      <Badge
-                        variant={s.isCustom ? "secondary" : "outline"}
-                        className="text-xs"
-                      >
-                        {s.name}
-                      </Badge>
-                    ))}
-                  </div>
-                )}
+                <div class="space-y-2">
+                  <div class="text-xs text-muted-foreground font-medium">关联服务</div>
+                  <ServiceManager
+                    client:load
+                    mailbox={mb.address}
+                    initialServices={services}
+                    templates={serviceTemplates}
+                  />
+                </div>
 
                 <div class="flex items-center gap-1 pt-2 border-t">
                   <a href={`/admin/emails?mailbox=${encodeURIComponent(mb.address)}`} class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-8 text-xs px-2">
@@ -566,7 +471,7 @@ const addMode = Astro.url.searchParams.get("mode") // "template" 或 "custom"
           id="closeModalBtn"
           class="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
         >
-          <X className="h-4 w-4" />
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-4 w-4"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
           <span class="sr-only">关闭</span>
         </button>
 
