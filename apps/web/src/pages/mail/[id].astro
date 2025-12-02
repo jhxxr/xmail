@@ -78,55 +78,55 @@ function sanitizeHtml(html: string): string {
 <Layout title={email.subject || "邮件详情"}>
   <div class="min-h-screen bg-gray-50">
     <!-- 顶部导航 -->
-    <header class="bg-white shadow">
-      <div class="max-w-4xl mx-auto px-4 py-4 flex items-center gap-4">
+    <header class="bg-white shadow sticky top-0 z-10">
+      <div class="max-w-4xl mx-auto px-4 py-4 flex items-center gap-2 sm:gap-4">
         <a
           href="/"
-          class="text-gray-500 hover:text-gray-700"
+          class="text-gray-500 hover:text-gray-700 flex-shrink-0"
         >
           ← 返回
         </a>
-        <span class="text-gray-300">|</span>
-        <span class="text-sm text-gray-500">{email.mailboxAddress}</span>
+        <span class="text-gray-300 hidden sm:inline">|</span>
+        <span class="text-sm text-gray-500 truncate">{email.mailboxAddress}</span>
       </div>
     </header>
 
     <!-- 邮件内容 -->
-    <main class="max-w-4xl mx-auto px-4 py-6">
-      <div class="bg-white rounded-lg shadow">
+    <main class="max-w-4xl mx-auto px-2 sm:px-4 py-4 sm:py-6">
+      <div class="bg-white rounded-lg shadow overflow-hidden">
         <!-- 邮件头 -->
-        <div class="px-6 py-4 border-b">
-          <h1 class="text-xl font-bold mb-4">
+        <div class="px-4 sm:px-6 py-4 border-b">
+          <h1 class="text-lg sm:text-xl font-bold mb-4 break-words">
             {email.subject || "(无主题)"}
           </h1>
           <div class="space-y-2 text-sm">
-            <div class="flex">
-              <span class="w-16 text-gray-500">发件人</span>
-              <span>
+            <div class="flex flex-col sm:flex-row sm:items-start gap-1 sm:gap-0">
+              <span class="w-full sm:w-16 text-gray-500 font-medium sm:font-normal flex-shrink-0">发件人</span>
+              <span class="break-words min-w-0">
                 {email.fromName && <span class="font-medium">{email.fromName}</span>}
-                <span class="text-gray-500 ml-1">&lt;{email.fromAddress}&gt;</span>
+                <span class="text-gray-500 ml-1 break-all">&lt;{email.fromAddress}&gt;</span>
               </span>
             </div>
-            <div class="flex">
-              <span class="w-16 text-gray-500">收件人</span>
-              <span>{email.messageTo}</span>
+            <div class="flex flex-col sm:flex-row sm:items-start gap-1 sm:gap-0">
+              <span class="w-full sm:w-16 text-gray-500 font-medium sm:font-normal flex-shrink-0">收件人</span>
+              <span class="break-words min-w-0">{email.messageTo}</span>
             </div>
-            <div class="flex">
-              <span class="w-16 text-gray-500">时间</span>
+            <div class="flex flex-col sm:flex-row sm:items-start gap-1 sm:gap-0">
+              <span class="w-full sm:w-16 text-gray-500 font-medium sm:font-normal flex-shrink-0">时间</span>
               <span>{email.date || formatDate(email.createdAt)}</span>
             </div>
           </div>
         </div>
 
         <!-- 邮件正文 -->
-        <div class="px-6 py-4">
+        <div class="px-4 sm:px-6 py-4 overflow-x-auto">
           {email.html ? (
             <div
-              class="prose max-w-none"
+              class="prose prose-sm sm:prose max-w-none"
               set:html={sanitizeHtml(email.html)}
             />
           ) : email.text ? (
-            <pre class="whitespace-pre-wrap font-sans text-gray-700">{email.text}</pre>
+            <pre class="whitespace-pre-wrap font-sans text-gray-700 text-sm overflow-x-auto">{email.text}</pre>
           ) : (
             <p class="text-gray-500">(无内容)</p>
           )}
@@ -138,20 +138,56 @@ function sanitizeHtml(html: string): string {
 
 <style>
   /* 邮件内容样式 */
+  .prose {
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    min-width: 0;
+  }
+
   .prose img {
     max-width: 100%;
     height: auto;
   }
+
   .prose a {
     color: #2563eb;
     text-decoration: underline;
+    word-break: break-word;
   }
+
   .prose table {
+    display: block;
     width: 100%;
+    overflow-x: auto;
     border-collapse: collapse;
+    max-width: 100%;
   }
+
   .prose td, .prose th {
     border: 1px solid #e5e7eb;
     padding: 0.5rem;
+    word-break: break-word;
+    min-width: 50px;
+  }
+
+  .prose pre {
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+
+  .prose code {
+    word-break: break-word;
+  }
+
+  /* 邮件内容可能包含固定宽度的元素 */
+  .prose * {
+    max-width: 100%;
+  }
+
+  /* 保持某些元素的原始宽度，但允许滚动 */
+  .prose table,
+  .prose img {
+    max-width: none;
   }
 </style>

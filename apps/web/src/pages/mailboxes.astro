@@ -1,0 +1,123 @@
+---
+import Layout from "../layouts/Layout.astro"
+import { createDB, getUserByToken, listMailboxes, getMailboxStats } from "database"
+import { verifyToken } from "../lib/auth"
+import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
+import { Button } from "../components/ui/button"
+import { Badge } from "../components/ui/badge"
+import { Mail, LogOut, ChevronRight, Inbox } from "lucide-react"
+
+const db = createDB(Astro.locals.runtime.env.DB)
+const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
+
+let userId: string | null = null
+
+// 检查 cookie 中的 token
+const token = Astro.cookies.get("user_token")?.value
+if (token) {
+  const payload = await verifyToken(token, jwtSecret)
+  if (payload?.type === "user" && payload.id) {
+    userId = payload.id
+  }
+}
+
+// 如果未登录，重定向到首页
+if (!userId) {
+  return Astro.redirect("/")
+}
+
+// 获取用户的所有邮箱
+const mailboxes = await listMailboxes(db, { userId, limit: 100 })
+
+// 获取每个邮箱的统计信息
+const mailboxesWithStats = await Promise.all(
+  mailboxes.map(async (mailbox) => {
+    const stats = await getMailboxStats(db, mailbox.address)
+    return {
+      ...mailbox,
+      stats,
+    }
+  })
+)
+---
+
+<Layout title="我的邮箱">
+  <div class="min-h-screen bg-muted/30">
+    <!-- 顶部导航栏 -->
+    <header class="bg-background border-b sticky top-0 z-10">
+      <div class="container max-w-5xl mx-auto px-4 h-16 flex justify-between items-center">
+        <div class="flex items-center gap-4">
+          <div class="w-8 h-8 bg-primary rounded-lg flex items-center justify-center text-primary-foreground">
+            <Mail className="w-4 h-4" />
+          </div>
+          <h1 class="font-bold text-lg">我的邮箱</h1>
+        </div>
+        <a href="/logout">
+          <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive">
+            <LogOut className="h-4 w-4 mr-2" />
+            退出
+          </Button>
+        </a>
+      </div>
+    </header>
+
+    <!-- 邮箱列表 -->
+    <main class="container max-w-5xl mx-auto px-4 py-8">
+      {mailboxesWithStats.length === 0 ? (
+        <Card className="flex flex-col items-center justify-center py-16 text-center">
+          <div class="w-16 h-16 bg-muted rounded-full flex items-center justify-center mb-4">
+            <Inbox className="w-8 h-8 text-muted-foreground" />
+          </div>
+          <h3 class="text-lg font-medium">暂无邮箱</h3>
+          <p class="text-muted-foreground mt-2 max-w-sm">
+            您还没有任何邮箱。请联系管理员分配邮箱。
+          </p>
+        </Card>
+      ) : (
+        <div class="space-y-4">
+          <div class="flex items-center justify-between mb-6">
+            <p class="text-muted-foreground">
+              共 <span class="font-semibold text-foreground">{mailboxesWithStats.length}</span> 个邮箱
+            </p>
+          </div>
+
+          <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {mailboxesWithStats.map((mailbox) => (
+              <a href={`/?mailbox=${mailbox.address}`}>
+                <Card className="group hover:border-primary/50 hover:shadow-md transition-all cursor-pointer h-full">
+                  <CardHeader className="pb-3">
+                    <div class="flex items-start justify-between gap-2">
+                      <div class="flex-1 min-w-0">
+                        <CardTitle className="text-base font-mono truncate group-hover:text-primary transition-colors">
+                          {mailbox.address}
+                        </CardTitle>
+                        {mailbox.note && (
+                          <p class="text-xs text-muted-foreground mt-1 truncate">
+                            {mailbox.note}
+                          </p>
+                        )}
+                      </div>
+                      <ChevronRight className="h-5 w-5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div class="flex items-center gap-2">
+                      <Badge variant="secondary" className="font-normal">
+                        {mailbox.stats.total} 封
+                      </Badge>
+                      {mailbox.stats.unread > 0 && (
+                        <Badge variant="default" className="font-normal animate-pulse">
+                          {mailbox.stats.unread} 未读
+                        </Badge>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
+    </main>
+  </div>
+</Layout>

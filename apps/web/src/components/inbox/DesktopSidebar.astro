@@ -1,0 +1,82 @@
+---
+import { MailboxInfo } from "./MailboxInfo"
+import { ServiceList } from "./ServiceList"
+import { LogOut, Trash2 } from "lucide-react"
+import { Button } from "../ui/button"
+
+interface Props {
+  mailboxes: any[]
+  selectedMailbox: string
+  stats: any
+  services: any[]
+}
+
+const { mailboxes, selectedMailbox, stats, services } = Astro.props
+---
+
+<aside class="w-80 flex-shrink-0 border-r bg-muted/10 min-h-screen flex flex-col">
+  <div class="p-6 space-y-6 flex-1 overflow-y-auto">
+    <!-- 邮箱选择器 -->
+    {mailboxes.length > 1 && (
+      <div class="space-y-2">
+        <label class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+          切换账号
+        </label>
+        <div class="relative">
+          <select
+            class="w-full h-11 rounded-lg border-2 border-primary/20 bg-background px-4 py-2 text-sm font-medium ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:border-primary appearance-none cursor-pointer hover:border-primary/40 transition-colors"
+            onchange="window.location.href='/?mailbox='+this.value"
+          >
+            {mailboxes.map((m) => (
+              <option value={m.address} selected={m.address === selectedMailbox}>
+                {m.address}
+              </option>
+            ))}
+          </select>
+          <div class="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none text-muted-foreground">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+            </svg>
+          </div>
+        </div>
+      </div>
+    )}
+
+    <!-- 邮箱信息卡片 -->
+    <MailboxInfo client:load address={selectedMailbox} stats={stats} />
+
+    <!-- 关联服务 -->
+    {services.length > 0 && (
+      <div class="pt-2">
+        <ServiceList client:visible services={services} />
+      </div>
+    )}
+  </div>
+
+  <!-- 底部操作按钮 -->
+  <div class="p-4 border-t bg-background/50 space-y-2">
+    <form
+      method="POST"
+      onsubmit="return confirm('确定要删除此邮箱吗？\n\n注意：\n• 邮箱将被移至回收站\n• 只有管理员可以恢复\n• 如果管理员清空回收站，邮箱将永久删除')"
+      class="w-full"
+    >
+      <input type="hidden" name="action" value="delete_mailbox" />
+      <input type="hidden" name="address" value={selectedMailbox} />
+      <Button
+        variant="ghost"
+        className="w-full justify-start text-muted-foreground hover:text-destructive"
+        type="submit"
+      >
+        <Trash2 className="mr-2 h-4 w-4" />
+        删除邮箱
+      </Button>
+    </form>
+
+    <a href="/logout" class="block">
+      <Button variant="ghost" className="w-full justify-start text-muted-foreground">
+        <LogOut className="mr-2 h-4 w-4" />
+        退出登录
+      </Button>
+    </a>
+  </div>
+</aside>

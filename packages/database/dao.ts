@@ -66,6 +66,13 @@ function decryptPassword(encrypted: string): string {
   }
 }
 
+async function createPasswordRecord(password: string): Promise<{ passwordHash: string; salt: string; plainPassword: string }> {
+  const salt = generateSalt()
+  const passwordHash = await hashPassword(password, salt)
+  const plainPassword = encryptPassword(password)
+  return { passwordHash, salt, plainPassword }
+}
+
 // ============ 管理员操作 ============
 
 export async function createAdmin(db: DB, username: string, password: string): Promise<schema.Admin> {
@@ -140,26 +147,43 @@ export async function countUsers(db: DB): Promise<number> {
 
 // ============ 邮箱操作 ============
 
-export async function createMailbox(db: DB, address: string, options: { note?: string; createdBy?: string } = {}): Promise<schema.Mailbox> {
+export async function createMailbox(db: DB, address: string, options: { note?: string; createdBy?: string } = {}): Promise<{ mailbox: schema.Mailbox; password: string }> {
+  const password = generatePassword()
+  const { passwordHash, salt, plainPassword } = await createPasswordRecord(password)
   const mailbox: schema.InsertMailbox = {
     address,
     note: options.note,
     createdBy: options.createdBy,
     createdAt: now(),
     isActive: true,
+    password: passwordHash,
+    salt,
+    plainPassword,
   }
   await db.insert(schema.mailboxes).values(mailbox)
-  return mailbox as schema.Mailbox
+  return { mailbox: mailbox as schema.Mailbox, password }
 }
 
-export async function createMailboxBatch(db: DB, addresses: string[], createdBy?: string): Promise<void> {
-  const mailboxes = addresses.map((address) => ({
-    address,
-    createdBy,
-    createdAt: now(),
-    isActive: true,
-  }))
+export async function createMailboxBatch(db: DB, addresses: string[], createdBy?: string): Promise<Array<{ address: string; password: string }>> {
+  const credentials: Array<{ address: string; password: string }> = []
+  const mailboxes: schema.InsertMailbox[] = await Promise.all(
+    addresses.map(async (address) => {
+      const password = generatePassword()
+      credentials.push({ address, password })
+      const { passwordHash, salt, plainPassword } = await createPasswordRecord(password)
+      return {
+        address,
+        createdBy,
+        createdAt: now(),
+        isActive: true,
+        password: passwordHash,
+        salt,
+        plainPassword,
+      }
+    })
+  )
   await db.insert(schema.mailboxes).values(mailboxes)
+  return credentials
 }
 
 export async function getMailbox(db: DB, address: string): Promise<schema.Mailbox | null> {
@@ -171,7 +195,7 @@ export async function listMailboxes(db: DB, options: { limit?: number; offset?: 
   let query = db.select().from(schema.mailboxes).where(isNull(schema.mailboxes.deletedAt))
   if (unassignedOnly) query = query.where(isNull(schema.mailboxes.userId)) as typeof query
   if (userId) query = query.where(eq(schema.mailboxes.userId, userId)) as typeof query
-  return query.orderBy(desc(schema.mailboxes.createdAt)).limit(limit).offset(offset).all()
+  return query.orderBy(desc(schema.mailboxes.createdAt)).limit(limit).offset(offset).all() as Array<schema.Mailbox & { plainPassword: string | null }>
 }
 
 export async function assignMailboxToUser(db: DB, address: string, userId: string | null): Promise<void> {
@@ -185,16 +209,8 @@ export async function assignMailboxesToUser(db: DB, addresses: string[], userId:
 }
 
 export async function setMailboxPassword(db: DB, address: string, password: string): Promise<string> {
-  const salt = generateSalt()
-  const passwordHash = await hashPassword(password, salt)
-  const plainPassword = encryptPassword(password) // 存储加密后的原始密码
+  const { passwordHash, salt, plainPassword } = await createPasswordRecord(password)
   await db.update(schema.mailboxes).set({ password: passwordHash, salt, plainPassword }).where(eq(schema.mailboxes.address, address))
-  return password
-}
-
-export async function setMailboxRandomPassword(db: DB, address: string): Promise<string> {
-  const password = generatePassword()
-  await setMailboxPassword(db, address, password)
   return password
 }
 

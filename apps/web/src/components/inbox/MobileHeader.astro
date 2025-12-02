@@ -1,0 +1,80 @@
+---
+import { MailboxInfo } from "./MailboxInfo"
+import { ServiceList } from "./ServiceList"
+import { LogOut, Mail, Trash2 } from "lucide-react"
+
+interface Props {
+  mailboxes: any[]
+  selectedMailbox: string
+  stats: any
+  services: any[]
+}
+
+const { mailboxes, selectedMailbox, stats, services } = Astro.props
+---
+
+<!-- 移动端布局 -->
+<div class="lg:hidden w-full">
+  <!-- Top Navigation Bar -->
+  <header class="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+    <div class="flex h-16 items-center px-4 gap-3">
+      <!-- Logo -->
+      <div class="flex items-center gap-2 flex-shrink-0">
+        <Mail class="h-5 w-5 text-primary" />
+        <span class="font-bold text-lg">XMail</span>
+      </div>
+
+      <!-- Mailbox Selector (if multiple mailboxes) -->
+      {mailboxes.length > 1 && (
+        <select
+          class="flex-1 h-10 rounded-lg border-2 border-primary/20 bg-background px-3 text-sm font-medium ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary appearance-none cursor-pointer hover:border-primary/40 transition-colors"
+          onchange="window.location.href='/?mailbox='+this.value"
+        >
+          {mailboxes.map((m) => (
+            <option value={m.address} selected={m.address === selectedMailbox}>
+              {m.address.length > 20 ? m.address.substring(0, 20) + '...' : m.address}
+            </option>
+          ))}
+        </select>
+      )}
+
+      <!-- Spacer for single mailbox -->
+      {mailboxes.length === 1 && <div class="flex-1" />}
+
+      <!-- Logout Button -->
+      <a href="/logout" class="flex-shrink-0">
+        <button class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-9 w-9">
+          <LogOut class="h-4 w-4" />
+        </button>
+      </a>
+    </div>
+  </header>
+
+  <!-- Main Content Area -->
+  <div class="p-4 space-y-4">
+    <!-- Mailbox Info Card -->
+    <MailboxInfo client:load address={selectedMailbox} stats={stats} />
+
+    <!-- Associated Services (Collapsible) -->
+    {services.length > 0 && (
+      <ServiceList client:visible services={services} isMobile={true} />
+    )}
+
+    <!-- Delete Mailbox Button -->
+    <form
+      method="POST"
+      onsubmit="return confirm('确定要删除此邮箱吗？\n\n注意：\n• 邮箱将被移至回收站\n• 只有管理员可以恢复\n• 如果管理员清空回收站，邮箱将永久删除')"
+      class="pt-2"
+    >
+      <input type="hidden" name="action" value="delete_mailbox" />
+      <input type="hidden" name="address" value={selectedMailbox} />
+      <button
+        type="submit"
+        class="w-full inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors border border-destructive/20 bg-background hover:bg-destructive/10 hover:text-destructive h-10 px-4 py-2"
+      >
+        <Trash2 class="mr-2 h-4 w-4" />
+        删除邮箱
+      </button>
+    </form>
+  </div>
+</div>

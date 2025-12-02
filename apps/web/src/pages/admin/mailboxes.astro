@@ -1,6 +1,6 @@
 ---
 import AdminLayout from "../../layouts/AdminLayout.astro"
-import { createDB, listMailboxes, createMailbox, createMailboxBatch, deleteMailbox, deleteMailboxesBatch, setMailboxActive, setMailboxRandomPassword, getMailboxPlainPassword, createLog, getAdminById, getMailDomain, getMailDomains, getUserById, getMailboxServicesMap, listServiceTemplates, addServiceToMailbox, addCustomServiceToMailbox, removeServiceFromMailbox } from "database"
+import { createDB, listMailboxes, createMailbox, createMailboxBatch, deleteMailbox, deleteMailboxesBatch, setMailboxActive, getMailboxPlainPassword, createLog, getAdminById, getMailDomain, getMailDomains, getUserById, getMailboxServicesMap, listServiceTemplates, addServiceToMailbox, addCustomServiceToMailbox, removeServiceFromMailbox } from "database"
 import { verifyToken } from "../../lib/auth"
 import { formatDate } from "../../lib/utils"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
@@ -8,7 +8,7 @@ import { Button } from "../../components/ui/button"
 import { Input } from "../../components/ui/input"
 import { Badge } from "../../components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "../../components/ui/dialog"
-import { Mail, Key, Power, Trash2, FileText, Plus, X, Copy, Check, Eye } from "lucide-react"
+import { Mail, Power, Trash2, FileText, Plus, X, Copy, Check, Eye } from "lucide-react"
 
 const db = createDB(Astro.locals.runtime.env.DB)
 const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
@@ -25,7 +25,7 @@ const [defaultDomain, mailDomains] = await Promise.all([getMailDomain(db), getMa
 
 let message = ""
 let messageType: "success" | "error" = "success"
-let generatedPassword = ""
+let generatedCredentials: Array<{ address: string; password: string }> = []
 
 // 随机人名生成
 const firstNames = ["happy", "swift", "bright", "calm", "cool", "fresh", "kind", "neat", "warm", "wise", "lucky", "sunny", "star", "moon", "sky", "cloud", "rain", "snow", "wind", "fire"]
@@ -50,8 +50,9 @@ if (Astro.request.method === "POST") {
     if (localPart && domain) {
       const address = `${localPart}@${domain}`
       try {
-        await createMailbox(db, address, { note, createdBy: admin.id })
+        const { mailbox, password } = await createMailbox(db, address, { note, createdBy: admin.id })
         await createLog(db, { adminId: admin.id, action: "create_mailbox", target: address })
+        generatedCredentials = [{ address, password }]
         message = `邮箱 ${address} 创建成功`
         messageType = "success"
       } catch (e: any) {
@@ -67,7 +68,7 @@ if (Astro.request.method === "POST") {
       addresses.push(`${generateRandomName()}@${domain}`)
     }
     try {
-      await createMailboxBatch(db, addresses, admin.id)
+      generatedCredentials = await createMailboxBatch(db, addresses, admin.id)
       await createLog(db, { adminId: admin.id, action: "batch_create_mailbox", details: { count: addresses.length, domain } })
       message = `成功创建 ${addresses.length} 个邮箱`
       messageType = "success"
@@ -98,20 +99,12 @@ if (Astro.request.method === "POST") {
       await createLog(db, { adminId: admin.id, action: isActive ? "disable_mailbox" : "enable_mailbox", target: address })
       message = `邮箱已${isActive ? "禁用" : "启用"}`
     }
-  } else if (action === "set_password") {
-    const address = formData.get("address")?.toString()
-    if (address) {
-      generatedPassword = await setMailboxRandomPassword(db, address)
-      await createLog(db, { adminId: admin.id, action: "set_mailbox_password", target: address })
-      message = `邮箱 ${address} 密码已设置`
-      messageType = "success"
-    }
   } else if (action === "view_password") {
     const address = formData.get("address")?.toString()
     if (address) {
       const password = await getMailboxPlainPassword(db, address)
       if (password) {
-        generatedPassword = password
+        generatedCredentials = [{ address, password }]
         message = `邮箱 ${address} 的密码`
         messageType = "success"
       } else {
@@ -196,6 +189,10 @@ const addMode = Astro.url.searchParams.get("mode") // "template" 或 "custom"
           <Plus className="mr-2 h-4 w-4" />
           创建邮箱
         </button>
+        <button id="exportSelectedBtn" class="hidden inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-blue-600 text-white hover:bg-blue-700 h-9 px-4">
+          <Copy className="mr-2 h-4 w-4" />
+          导出选中 (<span id="exportCount">0</span>)
+        </button>
         <button id="batchDeleteBtn" class="hidden inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-destructive text-destructive-foreground hover:bg-destructive/90 h-9 px-4">
           <Trash2 className="mr-2 h-4 w-4" />
           删除选中 (<span id="selectedCount">0</span>)
@@ -248,14 +245,36 @@ const addMode = Astro.url.searchParams.get("mode") // "template" 或 "custom"
     {message && (
       <div class={`p-4 rounded-md border ${messageType === "success" ? "bg-green-50 text-green-900 border-green-200" : "bg-red-50 text-red-900 border-red-200"}`}>
         {message}
-        {generatedPassword && (
-          <div class="mt-2 flex items-center gap-2">
-            <div class="flex-1 p-2 bg-white rounded border font-mono text-sm select-all" id="generatedPassword">{generatedPassword}</div>
-            <button id="copyPasswordBtn" type="button" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-green-600 bg-green-700 text-white h-9 px-3">
-              <Copy className="h-4 w-4 mr-1" id="copyIcon" />
-              <Check className="h-4 w-4 mr-1 hidden" id="checkIcon" />
-              <span id="copyBtnText">复制</span>
-            </button>
+        {generatedCredentials.length > 0 && (
+          <div class="mt-3 space-y-2">
+            <div class="max-h-64 overflow-y-auto border rounded bg-white">
+              <table class="w-full text-sm">
+                <thead class="bg-gray-50 sticky top-0">
+                  <tr>
+                    <th class="px-3 py-2 text-left font-medium">邮箱地址</th>
+                    <th class="px-3 py-2 text-left font-medium">密码</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y">
+                  {generatedCredentials.map((cred) => (
+                    <tr>
+                      <td class="px-3 py-2 font-mono text-xs">{cred.address}</td>
+                      <td class="px-3 py-2 font-mono text-xs">{cred.password}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div class="flex gap-2">
+              <button type="button" id="downloadCredentialsBtn" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-green-600 bg-green-700 text-white h-9 px-3">
+                <Copy className="h-4 w-4 mr-1" />
+                下载 CSV
+              </button>
+              <button type="button" id="copyAllCredentialsBtn" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors border border-input bg-background hover:bg-accent hover:text-accent-foreground h-9 px-3">
+                <Copy className="h-4 w-4 mr-1" />
+                复制全部
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -297,28 +316,15 @@ const addMode = Astro.url.searchParams.get("mode") // "template" 或 "custom"
                       </td>
                       <td class="p-4 align-middle font-mono">{mb.address}</td>
                       <td class="p-4 align-middle">
-                        <div class="flex flex-wrap gap-1 items-center">
-                          {services.map((s) => (
-                            <span class="group inline-flex items-center gap-1">
-                              <Badge
-                                variant={s.isCustom ? "secondary" : "outline"}
-                                className="text-xs cursor-help"
-                                title={`${s.loginUrl || ''}\n${s.note || ''}\n${s.isCustom ? '(临时服务)' : '(全局服务)'}`}
-                              >
-                                {s.name}
-                              </Badge>
-                              <form method="POST" class="inline opacity-0 group-hover:opacity-100 transition-opacity">
-                                <input type="hidden" name="action" value="delete_service" />
-                                <input type="hidden" name="service_id" value={s.id} />
-                                <button type="submit" class="text-muted-foreground hover:text-destructive" title="删除服务">
-                                  <X className="h-3 w-3" />
-                                </button>
-                              </form>
-                            </span>
-                          ))}
-                          <a href={`/admin/mailboxes?${filter ? `filter=${filter}&` : ''}expand=${isExpanded ? '' : mb.address}&mode=template`} class="inline-flex items-center justify-center rounded-md text-xs h-6 w-6 hover:bg-muted" title="添加服务">
-                            <Plus className="h-3 w-3" />
-                          </a>
+                        <div class="flex items-center gap-2 min-w-0">
+                          <span class="text-xs font-mono text-muted-foreground" id={`password-text-${mb.address}`} title={mb.plainPassword || '点击查看密码'}>{mb.plainPassword ? '•••••••••••••••••••' : '点击查看'}</span>
+                          <button type="button" class="view-password-btn text-blue-600 hover:text-blue-700 transition-colors" onclick="togglePasswordVisibility(this)" data-address={mb.address} data-password={mb.plainPassword || ''}>
+                            <Eye className="h-3 w-3" />
+                          </button>
+                          <form method="POST" class="hidden" id={`viewPasswordForm-${mb.address}`}>
+                            <input type="hidden" name="action" value="view_password" />
+                            <input type="hidden" name="address" value={mb.address} />
+                          </form>
                         </div>
                       </td>
                       <td class="p-4 align-middle">
@@ -344,13 +350,6 @@ const addMode = Astro.url.searchParams.get("mode") // "template" 或 "custom"
                           <a href={`/admin/emails?mailbox=${encodeURIComponent(mb.address)}`} class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-8 w-8" title="查看邮件">
                             <FileText className="h-4 w-4" />
                           </a>
-                          <form method="POST" class="inline">
-                            <input type="hidden" name="action" value="set_password" />
-                            <input type="hidden" name="address" value={mb.address} />
-                            <button type="submit" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-8 w-8 text-purple-600 hover:text-purple-700" title="设置密码">
-                              <Key className="h-4 w-4" />
-                            </button>
-                          </form>
                           {mb.password && (
                             <form method="POST" class="inline">
                               <input type="hidden" name="action" value="view_password" />
@@ -500,14 +499,6 @@ const addMode = Astro.url.searchParams.get("mode") // "template" 或 "custom"
                     <FileText className="h-3 w-3 mr-1" />
                     邮件
                   </a>
-                  <form method="POST" class="inline">
-                    <input type="hidden" name="action" value="set_password" />
-                    <input type="hidden" name="address" value={mb.address} />
-                    <button type="submit" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-8 text-xs text-purple-600">
-                      <Key className="h-3 w-3 mr-1" />
-                      密码
-                    </button>
-                  </form>
                   {mb.password && (
                     <form method="POST" class="inline">
                       <input type="hidden" name="action" value="view_password" />
@@ -630,7 +621,7 @@ const addMode = Astro.url.searchParams.get("mode") // "template" 或 "custom"
     </div>
   </div>
 
-  <script>
+  <script define:vars={{ generatedCredentials }}>
     // Modal 控制
     const createMailboxBtn = document.getElementById('createMailboxBtn')
     const createMailboxModal = document.getElementById('createMailboxModal')
@@ -684,50 +675,56 @@ const addMode = Astro.url.searchParams.get("mode") // "template" 或 "custom"
       singleCreateForm?.classList.add('hidden')
     })
 
-    // 复制密码功能
-    const copyPasswordBtn = document.getElementById('copyPasswordBtn')
-    const generatedPasswordDiv = document.getElementById('generatedPassword')
-    const copyIcon = document.getElementById('copyIcon')
-    const checkIcon = document.getElementById('checkIcon')
-    const copyBtnText = document.getElementById('copyBtnText')
+    // 下载凭证CSV
+    document.getElementById('downloadCredentialsBtn')?.addEventListener('click', () => {
+      if (generatedCredentials.length === 0) return
 
-    copyPasswordBtn?.addEventListener('click', async () => {
-      const password = generatedPasswordDiv?.textContent?.trim()
-      if (password) {
-        try {
-          await navigator.clipboard.writeText(password)
-          // 显示复制成功状态
-          copyIcon?.classList.add('hidden')
-          checkIcon?.classList.remove('hidden')
-          if (copyBtnText) copyBtnText.textContent = '已复制'
+      const header = 'address,password'
+      const rows = generatedCredentials.map(c => `"${c.address}","${c.password}"`).join('\n')
+      const csv = `${header}\n${rows}`
 
-          // 2秒后恢复原状
-          setTimeout(() => {
-            copyIcon?.classList.remove('hidden')
-            checkIcon?.classList.add('hidden')
-            if (copyBtnText) copyBtnText.textContent = '复制'
-          }, 2000)
-        } catch (err) {
-          console.error('复制失败:', err)
-        }
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `mailboxes-${Date.now()}.csv`
+      a.click()
+      URL.revokeObjectURL(url)
+    })
+
+    // 复制所有凭证
+    document.getElementById('copyAllCredentialsBtn')?.addEventListener('click', async () => {
+      if (generatedCredentials.length === 0) return
+
+      const text = generatedCredentials.map(c => `${c.address}\t${c.password}`).join('\n')
+      try {
+        await navigator.clipboard.writeText(text)
+        alert('已复制到剪贴板')
+      } catch (err: any) {
+        console.error('复制失败:', err)
       }
     })
 
     // 批量选择功能
     const selectAllCheckbox = document.getElementById('selectAll') as HTMLInputElement
     const mailboxCheckboxes = document.querySelectorAll('.mailbox-checkbox') as NodeListOf<HTMLInputElement>
-    const batchDeleteBtn = document.getElementById('batchDeleteBtn')
+    const batchDeleteBtn = document.getElementById('batchDeleteBtn') as HTMLButtonElement
+    const exportSelectedBtn = document.getElementById('exportSelectedBtn') as HTMLButtonElement
     const selectedCountSpan = document.getElementById('selectedCount')
+    const exportCountSpan = document.getElementById('exportCount')
     const batchDeleteForm = document.getElementById('batchDeleteForm') as HTMLFormElement
 
-    function updateBatchDeleteButton() {
+    function updateBatchButtons() {
       const selectedCount = Array.from(mailboxCheckboxes).filter(cb => cb.checked).length
       if (selectedCountSpan) selectedCountSpan.textContent = selectedCount.toString()
+      if (exportCountSpan) exportCountSpan.textContent = selectedCount.toString()
 
       if (selectedCount > 0) {
         batchDeleteBtn?.classList.remove('hidden')
+        exportSelectedBtn?.classList.remove('hidden')
       } else {
         batchDeleteBtn?.classList.add('hidden')
+        exportSelectedBtn?.classList.add('hidden')
       }
     }
 
@@ -736,7 +733,7 @@ const addMode = Astro.url.searchParams.get("mode") // "template" 或 "custom"
       mailboxCheckboxes.forEach(cb => {
         cb.checked = target.checked
       })
-      updateBatchDeleteButton()
+      updateBatchButtons()
     })
 
     mailboxCheckboxes.forEach(cb => {
@@ -747,8 +744,95 @@ const addMode = Astro.url.searchParams.get("mode") // "template" 或 "custom"
           selectAllCheckbox.checked = allChecked
           selectAllCheckbox.indeterminate = someChecked && !allChecked
         }
-        updateBatchDeleteButton()
+        updateBatchButtons()
       })
+    })
+
+    // 导出选中邮箱
+    exportSelectedBtn?.addEventListener('click', async () => {
+      const selectedAddresses = Array.from(mailboxCheckboxes)
+        .filter(cb => cb.checked)
+        .map(cb => cb.value)
+
+      if (selectedAddresses.length === 0) return
+
+      // 显示加载状态
+      exportSelectedBtn.disabled = true
+      const originalText = exportSelectedBtn.innerHTML
+      exportSelectedBtn.innerHTML = '<span class="inline-flex items-center gap-2"><span class="animate-spin">⏳</span> 导出中...</span>'
+
+      try {
+        // 并行获取所有邮箱的密码
+        const results = await Promise.all(
+          selectedAddresses.map(async (address) => {
+            try {
+              const formData = new FormData()
+              formData.append('action', 'view_password')
+              formData.append('address', address)
+
+              const response = await fetch(window.location.pathname, {
+                method: 'POST',
+                body: formData
+              })
+
+              if (!response.ok) {
+                console.error(`HTTP ${response.status} for ${address}`)
+                return { address, password: null, error: `HTTP ${response.status}` }
+              }
+
+              const html = await response.text()
+              // 解析返回的HTML获取密码
+              const parser = new DOMParser()
+              const doc = parser.parseFromString(html, 'text/html')
+              const passwordDiv = doc.querySelector('.select-all')
+              const password = passwordDiv?.textContent?.trim()
+
+              return { address, password, error: password ? null : '无密码' }
+            } catch (err: any) {
+              console.error(`Failed to get password for ${address}:`, err)
+              return { address, password: null, error: err.message }
+            }
+          })
+        )
+
+        // 分离成功和失败的记录
+        const credentials = results.filter(r => r.password).map(r => ({ address: r.address, password: r.password! }))
+        const failures = results.filter(r => !r.password)
+
+        if (credentials.length === 0) {
+          alert('未能获取任何密码，请确保选中的邮箱有设置密码')
+          return
+        }
+
+        // 生成CSV
+        const header = 'address,password'
+        const rows = credentials.map(c => `"${c.address}","${c.password}"`).join('\n')
+        const csv = `${header}\n${rows}`
+
+        // 下载CSV
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `mailboxes-export-${Date.now()}.csv`
+        a.click()
+        URL.revokeObjectURL(url)
+
+        // 显示结果
+        if (failures.length > 0) {
+          const failureDetails = failures.map(f => `- ${f.address}: ${f.error}`).join('\n')
+          alert(`导出完成！\n\n成功: ${credentials.length} 个\n失败: ${failures.length} 个\n\n失败详情:\n${failureDetails}`)
+        } else {
+          alert(`导出成功！共导出 ${credentials.length} 个邮箱`)
+        }
+      } catch (err: any) {
+        console.error('Export failed:', err)
+        alert(`导出失败: ${err.message}`)
+      } finally {
+        // 恢复按钮状态
+        exportSelectedBtn.disabled = false
+        exportSelectedBtn.innerHTML = originalText
+      }
     })
 
     batchDeleteBtn?.addEventListener('click', () => {
