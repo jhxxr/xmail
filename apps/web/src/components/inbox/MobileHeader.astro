@@ -1,7 +1,7 @@
 ---
 import { MailboxInfo } from "./MailboxInfo"
 import { ServiceList } from "./ServiceList"
-import { LogOut, Mail, Trash2 } from "lucide-react"
+import { LogOut, Mail, Trash2, Inbox as InboxIcon, Star } from "lucide-react"
 
 interface Props {
   mailboxes: any[]
@@ -11,6 +11,7 @@ interface Props {
 }
 
 const { mailboxes, selectedMailbox, stats, services } = Astro.props
+const currentFilter = Astro.url.searchParams.get("filter")
 ---
 
 <!-- 移动端布局 -->
@@ -54,6 +55,32 @@ const { mailboxes, selectedMailbox, stats, services } = Astro.props
   <div class="p-4 space-y-4">
     <!-- Mailbox Info Card -->
     <MailboxInfo client:load address={selectedMailbox} stats={stats} />
+
+    <!-- 邮件筛选 -->
+    <div class="flex gap-2">
+      <a
+        href={`/?mailbox=${encodeURIComponent(selectedMailbox)}`}
+        class={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+          !currentFilter
+            ? "bg-primary text-primary-foreground"
+            : "bg-muted text-muted-foreground hover:bg-muted/80"
+        }`}
+      >
+        <InboxIcon className="h-4 w-4" />
+        全部邮件
+      </a>
+      <a
+        href={`/?mailbox=${encodeURIComponent(selectedMailbox)}&filter=starred`}
+        class={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+          currentFilter === "starred"
+            ? "bg-primary text-primary-foreground"
+            : "bg-muted text-muted-foreground hover:bg-muted/80"
+        }`}
+      >
+        <Star className="h-4 w-4" />
+        已收藏
+      </a>
+    </div>
 
     <!-- Associated Services (Collapsible) -->
     {services.length > 0 && (

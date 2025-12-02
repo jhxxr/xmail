@@ -51,6 +51,7 @@ export const emails = sqliteTable("emails", {
   headers: text("headers"),
   messageId: text("message_id"),
   date: text("date"),
+  isStarred: integer("is_starred", { mode: "boolean" }).notNull().default(false),
   isRead: integer("is_read", { mode: "boolean" }).notNull().default(false),
   readAt: integer("read_at"),
   createdAt: integer("created_at").notNull(),

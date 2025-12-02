@@ -1,13 +1,13 @@
 ---
 import Layout from "../layouts/Layout.astro"
-import { createDB, getUserByToken, getMailbox, listMailboxes, verifyMailboxPassword, updateMailboxLastLogin, updateUserLastLogin, getEmailsByMailbox, getMailboxStats, getMailboxServicesWithDetails, deleteMailbox } from "database"
+import { createDB, getUserByToken, getMailbox, listMailboxes, verifyMailboxPassword, updateMailboxLastLogin, updateUserLastLogin, getEmailsByMailbox, getMailboxStats, getMailboxServicesWithDetails, deleteMailbox, toggleEmailStar, getEmail, listStarredEmails } from "database"
 import { verifyToken, generateUserToken } from "../lib/auth"
 import { formatDate, extractPreview } from "../lib/utils"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card"
 import { Button } from "../components/ui/button"
 import { Input } from "../components/ui/input"
 import { Badge } from "../components/ui/badge"
-import { Mail, Lock, Key, LogOut, Inbox, RefreshCw, ChevronRight, Copy } from "lucide-react"
+import { Mail, Lock, Key, LogOut, Inbox, RefreshCw, ChevronRight, Copy, Star } from "lucide-react"
 import DesktopSidebar from "../components/inbox/DesktopSidebar.astro"
 import MobileHeader from "../components/inbox/MobileHeader.astro"
 
@@ -257,6 +257,22 @@ if (Astro.request.method === "POST") {
         error = "无权删除此邮箱"
       }
     }
+  } else if (action === "toggle_star") {
+    // 用户收藏/取消收藏邮件（支持 token 登录和密码登录）
+    const emailId = formData.get("id")?.toString()
+    if (emailId) {
+      const email = await getEmail(db, emailId)
+      if (email) {
+        const mailbox = await getMailbox(db, email.mailboxAddress)
+        // Token 登录：检查邮箱是否属于该用户
+        // 密码登录：检查邮箱是否为当前选中的邮箱
+        const hasPermission = (userId && mailbox && mailbox.userId === userId) ||
+                              (selectedMailbox && email.mailboxAddress === selectedMailbox)
+        if (hasPermission) {
+          await toggleEmailStar(db, emailId, !email.isStarred)
+        }
+      }
+    }
   } else if (!userId && action === "token_login") {
     // Token 登录
     loginType = "token"
@@ -326,9 +342,12 @@ if (userId) {
 
 // 获取选中邮箱的邮件和服务
 let services: Awaited<ReturnType<typeof getMailboxServicesWithDetails>> = []
+const showStarred = Astro.url.searchParams.get("filter") === "starred"
 if (selectedMailbox) {
   [emails, stats, services] = await Promise.all([
-    getEmailsByMailbox(db, selectedMailbox, { limit: 50 }),
+    showStarred
+      ? listStarredEmails(db, selectedMailbox)
+      : getEmailsByMailbox(db, selectedMailbox, { limit: 50 }),
     getMailboxStats(db, selectedMailbox),
     getMailboxServicesWithDetails(db, selectedMailbox),
   ])
@@ -475,6 +494,22 @@ if (selectedMailbox) {
                           <div class="flex justify-between items-start gap-4 relative z-10 pointer-events-none">
                             <div class="flex-1 min-w-0">
                               <div class="flex items-center gap-2 mb-1">
+                                <form method="POST" class="pointer-events-auto relative z-20 -ml-1 mr-1">
+                                  <input type="hidden" name="action" value="toggle_star" />
+                                  <input type="hidden" name="id" value={email.id} />
+                                  <button
+                                    type="submit"
+                                    title={email.isStarred ? "取消收藏" : "收藏邮件（防止自动删除）"}
+                                    aria-label={email.isStarred ? "取消收藏此邮件" : "收藏此邮件以防止自动删除"}
+                                    class="flex items-center justify-center p-1 rounded-full hover:bg-muted transition-colors group/star focus:outline-none focus:ring-2 focus:ring-primary/20"
+                                  >
+                                    <Star
+                                      className={`h-4 w-4 transition-all ${
+                                        email.isStarred ? "fill-yellow-400 text-yellow-400" : "text-muted-foreground/30 group-hover/star:text-yellow-400"
+                                      }`}
+                                    />
+                                  </button>
+                                </form>
                                 {!email.isRead && <span class="w-2 h-2 bg-primary rounded-full flex-shrink-0 animate-pulse" />}
                                 <span class={`font-medium truncate text-sm ${!email.isRead ? "text-foreground" : "text-muted-foreground"}`}>
                                   {email.fromName || email.fromAddress}
@@ -559,6 +594,22 @@ if (selectedMailbox) {
                           <div class="flex justify-between items-start gap-4 relative z-10 pointer-events-none">
                             <div class="flex-1 min-w-0">
                               <div class="flex items-center gap-2 mb-1">
+                                <form method="POST" class="pointer-events-auto relative z-20 -ml-1 mr-1">
+                                  <input type="hidden" name="action" value="toggle_star" />
+                                  <input type="hidden" name="id" value={email.id} />
+                                  <button
+                                    type="submit"
+                                    title={email.isStarred ? "取消收藏" : "收藏邮件（防止自动删除）"}
+                                    aria-label={email.isStarred ? "取消收藏此邮件" : "收藏此邮件以防止自动删除"}
+                                    class="flex items-center justify-center p-1 rounded-full hover:bg-muted transition-colors group/star focus:outline-none focus:ring-2 focus:ring-primary/20"
+                                  >
+                                    <Star
+                                      className={`h-4 w-4 transition-all ${
+                                        email.isStarred ? "fill-yellow-400 text-yellow-400" : "text-muted-foreground/30 group-hover/star:text-yellow-400"
+                                      }`}
+                                    />
+                                  </button>
+                                </form>
                                 {!email.isRead && <span class="w-2 h-2 bg-primary rounded-full flex-shrink-0 animate-pulse" />}
                                 <span class={`font-medium truncate text-sm ${!email.isRead ? "text-foreground" : "text-muted-foreground"}`}>
                                   {email.fromName || email.fromAddress}

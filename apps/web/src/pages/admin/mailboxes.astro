@@ -624,19 +624,19 @@ if (serviceFilters.length > 0) {
       try {
         await navigator.clipboard.writeText(text)
         alert('已复制到剪贴板')
-      } catch (err: any) {
+      } catch (err) {
         console.error('复制失败:', err)
       }
     })
 
     // 批量选择功能
-    const selectAllCheckbox = document.getElementById('selectAll') as HTMLInputElement
-    const mailboxCheckboxes = document.querySelectorAll('.mailbox-checkbox') as NodeListOf<HTMLInputElement>
-    const batchDeleteBtn = document.getElementById('batchDeleteBtn') as HTMLButtonElement
-    const exportSelectedBtn = document.getElementById('exportSelectedBtn') as HTMLButtonElement
+    const selectAllCheckbox = document.getElementById('selectAll')
+    const mailboxCheckboxes = document.querySelectorAll('.mailbox-checkbox')
+    const batchDeleteBtn = document.getElementById('batchDeleteBtn')
+    const exportSelectedBtn = document.getElementById('exportSelectedBtn')
     const selectedCountSpan = document.getElementById('selectedCount')
     const exportCountSpan = document.getElementById('exportCount')
-    const batchDeleteForm = document.getElementById('batchDeleteForm') as HTMLFormElement
+    const batchDeleteForm = document.getElementById('batchDeleteForm')
 
     function updateBatchButtons() {
       const selectedCount = Array.from(mailboxCheckboxes).filter(cb => cb.checked).length
@@ -652,10 +652,9 @@ if (serviceFilters.length > 0) {
       }
     }
 
-    selectAllCheckbox?.addEventListener('change', (e) => {
-      const target = e.target as HTMLInputElement
+    selectAllCheckbox?.addEventListener('change', () => {
       mailboxCheckboxes.forEach(cb => {
-        cb.checked = target.checked
+        cb.checked = selectAllCheckbox.checked
       })
       updateBatchButtons()
     })
@@ -708,11 +707,11 @@ if (serviceFilters.length > 0) {
               // 解析返回的HTML获取密码
               const parser = new DOMParser()
               const doc = parser.parseFromString(html, 'text/html')
-              const passwordDiv = doc.querySelector('.select-all')
-              const password = passwordDiv?.textContent?.trim()
+              const passwordCell = doc.querySelector('.bg-green-50 table tbody tr td:nth-child(2)')
+              const password = passwordCell?.textContent?.trim()
 
               return { address, password, error: password ? null : '无密码' }
-            } catch (err: any) {
+            } catch (err) {
               console.error(`Failed to get password for ${address}:`, err)
               return { address, password: null, error: err.message }
             }
@@ -720,7 +719,7 @@ if (serviceFilters.length > 0) {
         )
 
         // 分离成功和失败的记录
-        const credentials = results.filter(r => r.password).map(r => ({ address: r.address, password: r.password! }))
+        const credentials = results.filter(r => r.password).map(r => ({ address: r.address, password: r.password }))
         const failures = results.filter(r => !r.password)
 
         if (credentials.length === 0) {
@@ -749,7 +748,7 @@ if (serviceFilters.length > 0) {
         } else {
           alert(`导出成功！共导出 ${credentials.length} 个邮箱`)
         }
-      } catch (err: any) {
+      } catch (err) {
         console.error('Export failed:', err)
         alert(`导出失败: ${err.message}`)
       } finally {

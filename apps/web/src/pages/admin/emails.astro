@@ -1,12 +1,12 @@
 ---
 import AdminLayout from "../../layouts/AdminLayout.astro"
-import { createDB, getAdminById, listAllEmails, getEmailsByMailbox, getEmail, deleteEmail, markEmailAsRead, listMailboxes } from "database"
+import { createDB, getAdminById, listAllEmails, getEmailsByMailbox, getEmail, deleteEmail, markEmailAsRead, listMailboxes, toggleEmailStar } from "database"
 import { verifyToken } from "../../lib/auth"
 import { formatDate, extractPreview } from "../../lib/utils"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
 import { Button } from "../../components/ui/button"
 import { Badge } from "../../components/ui/badge"
-import { ArrowLeft, Trash2, Mail, User, Clock, ArrowRight, Copy } from "lucide-react"
+import { ArrowLeft, Trash2, Mail, User, Clock, ArrowRight, Copy, Star } from "lucide-react"
 
 const db = createDB(Astro.locals.runtime.env.DB)
 const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
@@ -21,7 +21,7 @@ if (!admin) return Astro.redirect("/admin/login")
 
 let message = ""
 
-// 处理删除
+// 处理删除和收藏
 if (Astro.request.method === "POST") {
   const formData = await Astro.request.formData()
   const action = formData.get("action")?.toString()
@@ -30,6 +30,14 @@ if (Astro.request.method === "POST") {
     if (id) {
       await deleteEmail(db, id)
       message = "邮件已删除"
+    }
+  } else if (action === "toggle_star") {
+    const emailId = formData.get("id")?.toString()
+    if (emailId) {
+      const email = await getEmail(db, emailId)
+      if (email) {
+        await toggleEmailStar(db, emailId, !email.isStarred)
+      }
     }
   }
 }
@@ -286,38 +294,54 @@ function extractVerificationCode(text: string | null, html: string | null): stri
               {emails.map((email) => {
                 const verificationCode = extractVerificationCode(email.text, email.html)
                 return (
-                  <div class={`relative ${!email.isRead ? "bg-blue-50/50 dark:bg-blue-900/10" : ""}`}>
+                  <div class={`relative group ${!email.isRead ? "bg-blue-50/50 dark:bg-blue-900/10" : ""}`}>
                     <a
                       href={`/admin/emails?view=${email.id}${mailboxFilter ? `&mailbox=${encodeURIComponent(mailboxFilter)}` : ""}`}
-                      class="block p-4 hover:bg-muted/50 transition-colors"
-                    >
-                      <div class="flex justify-between items-start gap-4">
-                        <div class="flex-1 min-w-0 space-y-1">
-                          <div class="flex items-center gap-2 text-sm">
-                            {!email.isRead && <span class="w-2 h-2 bg-primary rounded-full flex-shrink-0" />}
-                            <span class="font-medium truncate">{email.fromName || email.fromAddress}</span>
-                            <ArrowRight className="h-3 w-3 text-muted-foreground" />
-                            <span class="text-muted-foreground truncate">{email.mailboxAddress}</span>
-                          </div>
-                          <div class="font-medium truncate">{email.subject || "(无主题)"}</div>
-                          <div class="flex items-center gap-2">
-                            <div class="text-sm text-muted-foreground truncate flex-1">{extractPreview(email.text, email.html)}</div>
-                            {verificationCode && (
-                              <button
-                                type="button"
-                                class="copy-code-btn flex items-center gap-1.5 px-2.5 py-1 bg-primary/10 hover:bg-primary/20 text-primary rounded-md text-xs font-mono font-semibold transition-colors border border-primary/30 flex-shrink-0"
-                                data-code={verificationCode}
-                                title="点击复制验证码"
-                              >
-                                <span>{verificationCode}</span>
-                                <Copy className="h-3 w-3" />
-                              </button>
-                            )}
-                          </div>
+                      class="absolute inset-0 z-0"
+                    ></a>
+
+                    <div class="relative z-10 flex justify-between items-start gap-4 p-4 pointer-events-none">
+                      <div class="flex-1 min-w-0 space-y-1">
+                        <div class="flex items-center gap-2 text-sm">
+                          <form method="POST" class="pointer-events-auto relative z-20 mr-1">
+                            <input type="hidden" name="action" value="toggle_star" />
+                            <input type="hidden" name="id" value={email.id} />
+                            <button
+                              type="submit"
+                              title={email.isStarred ? "取消收藏" : "收藏邮件（防止自动删除）"}
+                              aria-label={email.isStarred ? "取消收藏此邮件" : "收藏此邮件以防止自动删除"}
+                              class="flex items-center justify-center p-0.5 rounded hover:bg-muted transition-colors group/star"
+                            >
+                              <Star className={`h-4 w-4 ${
+                                email.isStarred
+                                  ? "fill-yellow-400 text-yellow-400"
+                                  : "text-muted-foreground/30 group-hover/star:text-yellow-400"
+                              }`} />
+                            </button>
+                          </form>
+                          {!email.isRead && <span class="w-2 h-2 bg-primary rounded-full flex-shrink-0" />}
+                          <span class="font-medium truncate">{email.fromName || email.fromAddress}</span>
+                          <ArrowRight className="h-3 w-3 text-muted-foreground" />
+                          <span class="text-muted-foreground truncate">{email.mailboxAddress}</span>
                         </div>
-                        <div class="text-xs text-muted-foreground whitespace-nowrap">{formatDate(email.createdAt)}</div>
+                        <div class="font-medium truncate">{email.subject || "(无主题)"}</div>
+                        <div class="flex items-center gap-2">
+                          <div class="text-sm text-muted-foreground truncate flex-1">{extractPreview(email.text, email.html)}</div>
+                          {verificationCode && (
+                            <button
+                              type="button"
+                              class="copy-code-btn pointer-events-auto relative z-20 flex items-center gap-1.5 px-2.5 py-1 bg-primary/10 hover:bg-primary/20 text-primary rounded-md text-xs font-mono font-semibold transition-colors border border-primary/30 flex-shrink-0"
+                              data-code={verificationCode}
+                              title="点击复制验证码"
+                            >
+                              <span>{verificationCode}</span>
+                              <Copy className="h-3 w-3" />
+                            </button>
+                          )}
+                        </div>
                       </div>
-                    </a>
+                      <div class="text-xs text-muted-foreground whitespace-nowrap">{formatDate(email.createdAt)}</div>
+                    </div>
                   </div>
                 )
               })}

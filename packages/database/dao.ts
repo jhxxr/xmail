@@ -302,13 +302,24 @@ export async function markEmailAsRead(db: DB, id: string): Promise<void> {
   await db.update(schema.emails).set({ isRead: true, readAt: now() }).where(eq(schema.emails.id, id))
 }
 
+export async function toggleEmailStar(db: DB, emailId: string, isStarred: boolean): Promise<void> {
+  await db.update(schema.emails).set({ isStarred }).where(eq(schema.emails.id, emailId))
+}
+
+export async function listStarredEmails(db: DB, mailboxAddress?: string): Promise<schema.Email[]> {
+  const condition = mailboxAddress
+    ? and(eq(schema.emails.isStarred, true), eq(schema.emails.mailboxAddress, mailboxAddress))
+    : eq(schema.emails.isStarred, true)
+  return db.select().from(schema.emails).where(condition).orderBy(desc(schema.emails.createdAt)).all()
+}
+
 export async function deleteEmail(db: DB, id: string): Promise<void> {
   await db.delete(schema.emails).where(eq(schema.emails.id, id))
 }
 
 export async function deleteOldEmails(db: DB, days: number): Promise<number> {
   const cutoff = now() - days * 24 * 60 * 60
-  const result = await db.delete(schema.emails).where(lt(schema.emails.createdAt, cutoff))
+  const result = await db.delete(schema.emails).where(and(lt(schema.emails.createdAt, cutoff), eq(schema.emails.isStarred, false)))
   return result.rowsAffected ?? 0
 }
 
