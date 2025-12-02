@@ -37,12 +37,13 @@ function extractVerificationCode(text: string | null, html: string | null): stri
 
   // 高优先级关键词（必须紧邻验证码，距离 < 25 字符）
   const strictKeywords = [
-    // 中文 - 高频核心词（包含"代码"）
-    '验证码', '代码', '校验码', '动态码', '确认码', '安全码', '认证码',
-    // 中文 - 带连接词的变体
+    // 中文 - 高频核心词
+    '验证码', '校验码', '动态码', '确认码', '安全码', '认证码',
+    // 中文 - 带连接词的变体（包含"代码"的特定组合）
     '验证码为', '验证码是', '代码为', '代码是', '动态码为', '确认码是',
     '临时验证码', '临时代码', '邮箱验证码', '手机验证码', '登录验证码', '注册验证码',
     '短信验证码', '登录码', '注册码', '动态密码', '一次性密码', '激活码', '通行码',
+    'chatgpt 代码', 'openai 代码', '验证代码', '安全代码',  // 特定服务的代码词组
     // 英文
     'verification code', 'verify code', 'confirmation code', 'security code',
     'otp', 'one-time password', 'one time password',
@@ -55,7 +56,8 @@ function extractVerificationCode(text: string | null, html: string | null): stri
   // 中等优先级关键词
   const mediumKeywords = [
     'passcode', 'pin code', 'pin', 'auth code', 'authentication code',
-    'access code', 'temp code', 'temporary code'
+    'access code', 'temp code', 'temporary code',
+    '代码',  // 单独的"代码"降级到中等优先级，避免误判
   ]
 
   // 排除模式 - 避免误判

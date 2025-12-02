@@ -308,6 +308,11 @@ const addMode = Astro.url.searchParams.get("mode") // "template" 或 "custom"
               mailboxes.map((mb) => {
                 const services = servicesMap[mb.address] || []
                 const isExpanded = expandedMailbox === mb.address
+                const addServiceParams = new URLSearchParams(Astro.url.search)
+                addServiceParams.set("expand", mb.address)
+                addServiceParams.delete("mode")
+                const addServiceQuery = addServiceParams.toString()
+                const addServiceUrl = `/admin/mailboxes${addServiceQuery ? "?" + addServiceQuery : ""}`
                 return (
                   <>
                     <tr class={`border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted ${!mb.isActive ? "opacity-60" : ""}`}>
@@ -316,15 +321,29 @@ const addMode = Astro.url.searchParams.get("mode") // "template" 或 "custom"
                       </td>
                       <td class="p-4 align-middle font-mono">{mb.address}</td>
                       <td class="p-4 align-middle">
-                        <div class="flex items-center gap-2 min-w-0">
-                          <span class="text-xs font-mono text-muted-foreground" id={`password-text-${mb.address}`} title={mb.plainPassword || '点击查看密码'}>{mb.plainPassword ? '•••••••••••••••••••' : '点击查看'}</span>
-                          <button type="button" class="view-password-btn text-blue-600 hover:text-blue-700 transition-colors" onclick="togglePasswordVisibility(this)" data-address={mb.address} data-password={mb.plainPassword || ''}>
-                            <Eye className="h-3 w-3" />
-                          </button>
-                          <form method="POST" class="hidden" id={`viewPasswordForm-${mb.address}`}>
-                            <input type="hidden" name="action" value="view_password" />
-                            <input type="hidden" name="address" value={mb.address} />
-                          </form>
+                        <div class="space-y-2">
+                          {services.length > 0 ? (
+                            <div class="flex flex-wrap gap-1">
+                              {services.map((service) => (
+                                <Badge
+                                  variant={service.isCustom ? "secondary" : "outline"}
+                                  className="text-xs"
+                                >
+                                  {service.name}
+                                </Badge>
+                              ))}
+                            </div>
+                          ) : (
+                            <span class="text-sm text-muted-foreground">未关联服务</span>
+                          )}
+                          <a
+                            href={addServiceUrl}
+                            class={`inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors h-7 px-2 ${isExpanded ? "bg-primary text-primary-foreground" : "border border-dashed border-input text-muted-foreground hover:bg-accent hover:text-accent-foreground"}`}
+                            title="添加关联服务"
+                          >
+                            <Plus className="h-3 w-3 mr-1" />
+                            添加
+                          </a>
                         </div>
                       </td>
                       <td class="p-4 align-middle">
