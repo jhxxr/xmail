@@ -727,6 +727,91 @@ export async function getExternalAccountServicesWithDetails(db: DB, accountId: s
   return result
 }
 
+// 获取多个第三方账号的服务（批量查询）
+export async function getExternalAccountServicesMap(db: DB, accountIds: string[]) {
+  if (accountIds.length === 0) return {}
+
+  // 1. 批量获取所有账号���服务关联
+  const allServices = await db
+    .select()
+    .from(schema.externalAccountServices)
+    .where(inArray(schema.externalAccountServices.accountId, accountIds))
+    .all()
+
+  // 2. 收集所有需要的 templateId
+  const templateIds = allServices
+    .filter((s) => s.templateId)
+    .map((s) => s.templateId as string)
+  const uniqueTemplateIds = [...new Set(templateIds)]
+
+  // 3. 批量获取所有模板
+  const templates =
+    uniqueTemplateIds.length > 0
+      ? await db
+          .select()
+          .from(schema.serviceTemplates)
+          .where(inArray(schema.serviceTemplates.id, uniqueTemplateIds))
+          .all()
+      : []
+
+  // 4. 构建模板映射
+  const templateMap = new Map(templates.map((t) => [t.id, t]))
+
+  // 5. 按账号ID分组并构建结果
+  const result: Record<string, Array<{
+    id: string
+    name: string
+    loginUrl: string
+    note: string | null
+    isCustom: boolean
+    templateId: string | null
+  }>> = {}
+
+  // 初始化所有账号的结果数组
+  for (const id of accountIds) {
+    result[id] = []
+  }
+
+  // 填充服务信息
+  for (const service of allServices) {
+    if (service.templateId) {
+      const template = templateMap.get(service.templateId)
+      if (template) {
+        result[service.accountId].push({
+          id: service.id,
+          name: template.name,
+          loginUrl: template.loginUrl,
+          note: template.note,
+          isCustom: false,
+          templateId: template.id,
+        })
+      } else {
+        // 模板已被删除，显示占位符
+        result[service.accountId].push({
+          id: service.id,
+          name: "未知服务",
+          loginUrl: "",
+          note: "该服务模板已被删除",
+          isCustom: false,
+          templateId: service.templateId,
+        })
+      }
+    } else {
+      // 自定义服务
+      result[service.accountId].push({
+        id: service.id,
+        name: service.customName || "未命名服务",
+        loginUrl: service.customLoginUrl || "",
+        note: service.customNote,
+        isCustom: true,
+        templateId: null,
+      })
+    }
+  }
+
+  return result
+}
+
 // 删除第三方账号的服务关联
 export async function removeServiceFromExternalAccount(db: DB, serviceId: string): Promise<void> {
   await db.delete(schema.externalAccountServices).where(eq(schema.externalAccountServices.id, serviceId))
