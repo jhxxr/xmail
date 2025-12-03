@@ -131,6 +131,22 @@ export const userExternalAccounts = sqliteTable("user_external_accounts", {
   pk: { columns: [t.userId, t.accountId] },
 }))
 
+// 第三方账号服务关联表（类似 mailboxServices）
+export const externalAccountServices = sqliteTable("external_account_services", {
+  id: text("id").primaryKey(),
+  accountId: text("account_id").notNull().references(() => externalAccounts.id, { onDelete: "cascade" }),
+
+  // 方式1: 引用全局服务模板
+  templateId: text("template_id").references(() => serviceTemplates.id, { onDelete: "cascade" }),
+
+  // 方式2: 临时自定义服务 (templateId 为 null 时使用)
+  customName: text("custom_name"),
+  customLoginUrl: text("custom_login_url"),
+  customNote: text("custom_note"),
+
+  createdAt: integer("created_at").notNull(),
+})
+
 // 类型导出
 export type Admin = typeof admins.$inferSelect
 export type InsertAdmin = typeof admins.$inferInsert
@@ -152,3 +168,5 @@ export type ExternalAccount = typeof externalAccounts.$inferSelect
 export type InsertExternalAccount = typeof externalAccounts.$inferInsert
 export type UserExternalAccount = typeof userExternalAccounts.$inferSelect
 export type InsertUserExternalAccount = typeof userExternalAccounts.$inferInsert
+export type ExternalAccountService = typeof externalAccountServices.$inferSelect
+export type InsertExternalAccountService = typeof externalAccountServices.$inferInsert

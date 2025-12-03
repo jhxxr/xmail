@@ -1,12 +1,12 @@
 ---
 import Layout from "../../layouts/Layout.astro"
-import { createDB, getExternalAccount, getExternalProvider, getEmailsByMailbox, getMailboxStats, getUserExternalAccounts } from "database"
+import { createDB, getExternalAccount, getExternalProvider, getEmailsByMailbox, getMailboxStats, getUserExternalAccounts, getExternalAccountServicesWithDetails } from "database"
 import { verifyToken } from "../../lib/auth"
 import { decryptPassword, formatDate, extractPreview, extractVerificationCode } from "../../lib/utils"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
 import { Button } from "../../components/ui/button"
 import { Badge } from "../../components/ui/badge"
-import { Mail, ExternalLink, Copy, Eye, EyeOff, ChevronRight, ArrowLeft } from "lucide-react"
+import { Mail, ExternalLink, Copy, Eye, EyeOff, ChevronRight, ArrowLeft, Globe } from "lucide-react"
 
 const db = createDB(Astro.locals.runtime.env.DB)
 const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
@@ -50,6 +50,9 @@ if (!provider) {
 
 // 解密密码
 const decryptedPassword = decryptPassword(account.encryptedPassword, encryptionKey)
+
+// 获取绑定的服务
+const services = await getExternalAccountServicesWithDetails(db, accountId)
 
 // 如果有辅助邮箱，获取邮件
 let auxiliaryEmails: Awaited<ReturnType<typeof getEmailsByMailbox>> = []
@@ -146,6 +149,38 @@ if (account.linkedMailboxAddress) {
             <div>
               <label class="text-sm font-medium text-muted-foreground">备注</label>
               <p class="text-sm mt-1">{account.note}</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <!-- 绑定的服务 -->
+      <Card>
+        <CardHeader>
+          <CardTitle>绑定的服务</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {services.length > 0 ? (
+            <div class="grid gap-4 sm:grid-cols-2">
+              {services.map((service) => (
+                <a
+                  href={service.loginUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors group"
+                >
+                  <div class="flex-1 min-w-0 mr-3">
+                    <div class="font-medium truncate">{service.name}</div>
+                    {service.note && <div class="text-xs text-muted-foreground truncate mt-1">{service.note}</div>}
+                  </div>
+                  <ExternalLink className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors flex-shrink-0" />
+                </a>
+              ))}
+            </div>
+          ) : (
+            <div class="text-center py-6 text-muted-foreground">
+              <Globe className="h-10 w-10 mx-auto mb-2 opacity-20" />
+              <p>暂无绑定服务</p>
             </div>
           )}
         </CardContent>

@@ -677,3 +677,57 @@ export async function getExternalAccountUsers(db: DB, accountId: string) {
   if (userIds.length === 0) return []
   return db.select().from(schema.users).where(inArray(schema.users.id, userIds)).all()
 }
+
+// ==================== 第三方账号服务绑定 ====================
+
+// 为第三方账号添加服务
+export async function addServiceToExternalAccount(db: DB, service: schema.InsertExternalAccountService) {
+  await db.insert(schema.externalAccountServices).values(service)
+  return service as schema.ExternalAccountService
+}
+
+// 获取第三方账号的所有服务（包含完整信息）
+export async function getExternalAccountServicesWithDetails(db: DB, accountId: string) {
+  const services = await db.select().from(schema.externalAccountServices).where(eq(schema.externalAccountServices.accountId, accountId)).all()
+
+  const result = []
+  for (const service of services) {
+    if (service.templateId) {
+      const template = await getServiceTemplate(db, service.templateId)
+      if (template) {
+        result.push({
+          id: service.id,
+          name: template.name,
+          loginUrl: template.loginUrl,
+          note: template.note,
+          isCustom: false,
+          templateId: template.id,
+        })
+      } else {
+        result.push({
+          id: service.id,
+          name: "未知服务",
+          loginUrl: "",
+          note: "该服务模板已被删除",
+          isCustom: false,
+          templateId: service.templateId,
+        })
+      }
+    } else {
+      result.push({
+        id: service.id,
+        name: service.customName || "未命名服务",
+        loginUrl: service.customLoginUrl || "",
+        note: service.customNote,
+        isCustom: true,
+        templateId: null,
+      })
+    }
+  }
+  return result
+}
+
+// 删除第三方账号的服务关联
+export async function removeServiceFromExternalAccount(db: DB, serviceId: string): Promise<void> {
+  await db.delete(schema.externalAccountServices).where(eq(schema.externalAccountServices.id, serviceId))
+}

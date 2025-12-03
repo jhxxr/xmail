@@ -36,5 +36,6 @@ apps/email-worker/migrations/
 # macOS
 .DS_Store
 
-# Claude Code instructions (auto-generated, not part of repo)
+# instructions (auto-generated, not part of repo)
 CLAUDE.md
+AGENTS.md

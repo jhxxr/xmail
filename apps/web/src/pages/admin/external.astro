@@ -1,6 +1,6 @@
 ---
 import AdminLayout from "../../layouts/AdminLayout.astro"
-import { createDB, listExternalProviders, listExternalAccounts, createExternalProvider, createExternalAccount, deleteExternalProvider, deleteExternalAccount, listMailboxes, getExternalAccountUsers, assignExternalAccountToUser, unassignExternalAccountFromUser, listUsers, updateExternalProvider, updateExternalAccount } from "database"
+import { createDB, listExternalProviders, listExternalAccounts, createExternalProvider, createExternalAccount, deleteExternalProvider, deleteExternalAccount, listMailboxes, getExternalAccountUsers, assignExternalAccountToUser, unassignExternalAccountFromUser, listUsers, updateExternalProvider, updateExternalAccount, addServiceToExternalAccount, removeServiceFromExternalAccount, listServiceTemplates, getExternalAccountServicesWithDetails } from "database"
 import { verifyToken } from "../../lib/auth"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
 import { Button } from "../../components/ui/button"
@@ -9,6 +9,7 @@ import { Badge } from "../../components/ui/badge"
 import { Plus, Trash2, Users, Mail, Edit } from "lucide-react"
 import { nanoid } from "nanoid"
 import { encryptPassword } from "../../lib/utils"
+import { ExternalServiceManager } from "../../components/admin/ExternalServiceManager"
 
 const db = createDB(Astro.locals.runtime.env.DB)
 const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
@@ -147,6 +148,44 @@ if (Astro.request.method === "POST") {
 
         message = "用户分配已更新"
       }
+    } else if (action === "add_external_template_service") {
+      const accountId = formData.get("accountId")?.toString()
+      const templateId = formData.get("template_id")?.toString()
+      if (accountId && templateId) {
+        await addServiceToExternalAccount(db, {
+          id: nanoid(),
+          accountId,
+          templateId,
+          customName: null,
+          customLoginUrl: null,
+          customNote: null,
+          createdAt: Math.floor(Date.now() / 1000),
+        })
+        message = "服务已关联"
+      }
+    } else if (action === "add_external_custom_service") {
+      const accountId = formData.get("accountId")?.toString()
+      const name = formData.get("service_name")?.toString()?.trim()
+      const loginUrl = formData.get("service_login_url")?.toString()?.trim()
+      const note = formData.get("service_note")?.toString()?.trim()
+      if (accountId && name && loginUrl) {
+        await addServiceToExternalAccount(db, {
+          id: nanoid(),
+          accountId,
+          templateId: null,
+          customName: name,
+          customLoginUrl: loginUrl,
+          customNote: note || null,
+          createdAt: Math.floor(Date.now() / 1000),
+        })
+        message = `临时服务 ${name} 已添加`
+      }
+    } else if (action === "delete_external_service") {
+      const serviceId = formData.get("service_id")?.toString()
+      if (serviceId) {
+        await removeServiceFromExternalAccount(db, serviceId)
+        message = "服务已删除"
+      }
     }
   } catch (e) {
     error = e instanceof Error ? e.message : "操作失败"
@@ -158,6 +197,14 @@ const providers = await listExternalProviders(db)
 const allAccounts = await listExternalAccounts(db)
 const mailboxes = await listMailboxes(db, { limit: 1000 })
 const users = await listUsers(db, { limit: 1000 })
+const serviceTemplates = await listServiceTemplates(db)
+const accountServicesEntries = await Promise.all(
+  allAccounts.map(async (account) => {
+    const services = await getExternalAccountServicesWithDetails(db, account.id)
+    return [account.id, services] as const
+  })
+)
+const accountServicesMap = Object.fromEntries(accountServicesEntries) as Record<string, Awaited<ReturnType<typeof getExternalAccountServicesWithDetails>>>
 
 // 按提供商分组账号
 const accountsByProvider = new Map<string, typeof allAccounts>()
@@ -239,7 +286,7 @@ for (const provider of providers) {
         </CardHeader>
 
         <!-- 编辑提供商弹窗 -->
-        <dialog id={`edit-provider-${provider.id}`} class="rounded-lg p-6 backdrop:bg-black/50 min-w-[500px]">
+        <dialog id={`edit-provider-${provider.id}`} class="rounded-lg p-6 backdrop:bg-black/50 min-w-[500px] fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 m-0">
           <form method="POST">
             <input type="hidden" name="action" value="update_provider" />
             <input type="hidden" name="providerId" value={provider.id} />
@@ -324,6 +371,15 @@ for (const provider of providers) {
                     {account.note && (
                       <p class="text-xs text-muted-foreground mt-1 ml-6">{account.note}</p>
                     )}
+                    <div class="mt-2 ml-6">
+                      <ExternalServiceManager
+                        client:load
+                        accountId={account.id}
+                        accountLabel={account.email}
+                        initialServices={accountServicesMap[account.id] || []}
+                        templates={serviceTemplates}
+                      />
+                    </div>
                   </div>
                   <div class="flex items-center gap-2">
                     <button
@@ -352,7 +408,7 @@ for (const provider of providers) {
                   </div>
 
                   <!-- 编辑账号弹窗 -->
-                  <dialog id={`edit-account-${account.id}`} class="rounded-lg p-6 backdrop:bg-black/50 min-w-[500px]">
+                  <dialog id={`edit-account-${account.id}`} class="rounded-lg p-6 backdrop:bg-black/50 min-w-[500px] fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 m-0">
                     <form method="POST">
                       <input type="hidden" name="action" value="update_account" />
                       <input type="hidden" name="accountId" value={account.id} />
@@ -398,7 +454,7 @@ for (const provider of providers) {
                   </dialog>
 
                   <!-- 分配用户弹窗 -->
-                  <dialog id={`assign-modal-${account.id}`} class="rounded-lg p-6 backdrop:bg-black/50">
+                  <dialog id={`assign-modal-${account.id}`} class="rounded-lg p-6 backdrop:bg-black/50 fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 m-0 min-w-[400px]">
                     <form method="POST">
                       <input type="hidden" name="action" value="assign_users" />
                       <input type="hidden" name="accountId" value={account.id} />
