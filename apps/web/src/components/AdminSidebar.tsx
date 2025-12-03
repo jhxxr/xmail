@@ -10,7 +10,8 @@ import {
   Menu,
   Globe,
   Trash2,
-  X
+  X,
+  ExternalLink
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -22,6 +23,7 @@ const menuItems = [
   { href: '/admin', icon: LayoutDashboard, label: '概览', exact: true },
   { href: '/admin/users', icon: Users, label: '用户管理' },
   { href: '/admin/mailboxes', icon: Mail, label: '邮箱管理' },
+  { href: '/admin/external', icon: ExternalLink, label: '第三方邮箱' },
   { href: '/admin/services', icon: Globe, label: '服务管理' },
   { href: '/admin/trash', icon: Trash2, label: '回收站' },
   { href: '/admin/assign', icon: LinkIcon, label: '分配管理' },

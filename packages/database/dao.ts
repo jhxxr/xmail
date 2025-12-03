@@ -1,5 +1,5 @@
 import { drizzle, DrizzleD1Database } from "drizzle-orm/d1"
-import { eq, desc, and, count, isNull, lt, isNotNull } from "drizzle-orm"
+import { eq, desc, and, count, isNull, lt, isNotNull, inArray } from "drizzle-orm"
 import { nanoid } from "nanoid"
 import * as schema from "./schema"
 
@@ -505,18 +505,175 @@ export async function getMailboxServicesWithDetails(db: DB, mailboxAddress: stri
   return result
 }
 
-// 获取多个邮箱的服务
+// 获取多个邮箱的服务（优化版：批量查询）
 export async function getMailboxServicesMap(db: DB, mailboxAddresses: string[]) {
   if (mailboxAddresses.length === 0) return {}
 
-  const result: Record<string, Awaited<ReturnType<typeof getMailboxServicesWithDetails>>> = {}
+  // 1. 批量获取所有邮箱的服务关联
+  const allServices = await db
+    .select()
+    .from(schema.mailboxServices)
+    .where(inArray(schema.mailboxServices.mailboxAddress, mailboxAddresses))
+    .all()
+
+  // 2. 收集所有需要的 templateId
+  const templateIds = allServices
+    .filter((s) => s.templateId)
+    .map((s) => s.templateId as string)
+  const uniqueTemplateIds = [...new Set(templateIds)]
+
+  // 3. 批量获取所有模板
+  const templates =
+    uniqueTemplateIds.length > 0
+      ? await db
+          .select()
+          .from(schema.serviceTemplates)
+          .where(inArray(schema.serviceTemplates.id, uniqueTemplateIds))
+          .all()
+      : []
+
+  // 4. 构建模板映射
+  const templateMap = new Map(templates.map((t) => [t.id, t]))
+
+  // 5. 按邮箱地址分组并构建结果
+  const result: Record<string, Array<{
+    id: string
+    name: string
+    loginUrl: string
+    note: string | null
+    isCustom: boolean
+    templateId: string | null
+  }>> = {}
+
+  // 初始化所有邮箱的结果数组
   for (const address of mailboxAddresses) {
-    result[address] = await getMailboxServicesWithDetails(db, address)
+    result[address] = []
   }
+
+  // 填充服务信息
+  for (const service of allServices) {
+    if (service.templateId) {
+      const template = templateMap.get(service.templateId)
+      if (template) {
+        result[service.mailboxAddress].push({
+          id: service.id,
+          name: template.name,
+          loginUrl: template.loginUrl,
+          note: template.note,
+          isCustom: false,
+          templateId: template.id,
+        })
+      } else {
+        // 模板已被删除，显示占位符
+        result[service.mailboxAddress].push({
+          id: service.id,
+          name: "未知服务",
+          loginUrl: "",
+          note: "该服务模板已被删除",
+          isCustom: false,
+          templateId: service.templateId,
+        })
+      }
+    } else {
+      // 自定义服务
+      result[service.mailboxAddress].push({
+        id: service.id,
+        name: service.customName || "未命名服务",
+        loginUrl: service.customLoginUrl || "",
+        note: service.customNote,
+        isCustom: true,
+        templateId: null,
+      })
+    }
+  }
+
   return result
 }
 
 // 删除服务关联
 export async function removeServiceFromMailbox(db: DB, serviceId: string): Promise<void> {
   await db.delete(schema.mailboxServices).where(eq(schema.mailboxServices.id, serviceId))
+}
+
+// ==================== 第三方邮箱管理 ====================
+
+// 创建第三方提供商
+export async function createExternalProvider(db: DB, provider: schema.InsertExternalProvider) {
+  await db.insert(schema.externalProviders).values(provider)
+  return provider as schema.ExternalProvider
+}
+
+// 获取所有提供商
+export async function listExternalProviders(db: DB) {
+  return db.select().from(schema.externalProviders).orderBy(schema.externalProviders.name).all()
+}
+
+// 获取单个提供商
+export async function getExternalProvider(db: DB, id: string) {
+  return db.select().from(schema.externalProviders).where(eq(schema.externalProviders.id, id)).get()
+}
+
+// 更新提供商
+export async function updateExternalProvider(db: DB, id: string, data: Partial<schema.ExternalProvider>) {
+  await db.update(schema.externalProviders).set(data).where(eq(schema.externalProviders.id, id))
+}
+
+// 删除提供商
+export async function deleteExternalProvider(db: DB, id: string) {
+  await db.delete(schema.externalProviders).where(eq(schema.externalProviders.id, id))
+}
+
+// 创建第三方账号
+export async function createExternalAccount(db: DB, account: schema.InsertExternalAccount) {
+  await db.insert(schema.externalAccounts).values(account)
+  return account as schema.ExternalAccount
+}
+
+// 获取提供商的所有账号
+export async function listExternalAccounts(db: DB, providerId?: string) {
+  if (providerId) {
+    return db.select().from(schema.externalAccounts).where(eq(schema.externalAccounts.providerId, providerId)).all()
+  }
+  return db.select().from(schema.externalAccounts).all()
+}
+
+// 获取单个账号
+export async function getExternalAccount(db: DB, id: string) {
+  return db.select().from(schema.externalAccounts).where(eq(schema.externalAccounts.id, id)).get()
+}
+
+// 更新账号
+export async function updateExternalAccount(db: DB, id: string, data: Partial<schema.ExternalAccount>) {
+  await db.update(schema.externalAccounts).set({ ...data, updatedAt: now() }).where(eq(schema.externalAccounts.id, id))
+}
+
+// 删除账号
+export async function deleteExternalAccount(db: DB, id: string) {
+  await db.delete(schema.externalAccounts).where(eq(schema.externalAccounts.id, id))
+}
+
+// 分配账号给用户
+export async function assignExternalAccountToUser(db: DB, userId: string, accountId: string) {
+  await db.insert(schema.userExternalAccounts).values({ userId, accountId, assignedAt: now() })
+}
+
+// 取消分配
+export async function unassignExternalAccountFromUser(db: DB, userId: string, accountId: string) {
+  await db.delete(schema.userExternalAccounts).where(and(eq(schema.userExternalAccounts.userId, userId), eq(schema.userExternalAccounts.accountId, accountId)))
+}
+
+// 获取用户的所有第三方账号
+export async function getUserExternalAccounts(db: DB, userId: string) {
+  const assignments = await db.select().from(schema.userExternalAccounts).where(eq(schema.userExternalAccounts.userId, userId)).all()
+  const accountIds = assignments.map(a => a.accountId)
+  if (accountIds.length === 0) return []
+  return db.select().from(schema.externalAccounts).where(inArray(schema.externalAccounts.id, accountIds)).all()
+}
+
+// 获取账号分配的用户列表
+export async function getExternalAccountUsers(db: DB, accountId: string) {
+  const assignments = await db.select().from(schema.userExternalAccounts).where(eq(schema.userExternalAccounts.accountId, accountId)).all()
+  const userIds = assignments.map(a => a.userId)
+  if (userIds.length === 0) return []
+  return db.select().from(schema.users).where(inArray(schema.users.id, userIds)).all()
 }

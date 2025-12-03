@@ -243,3 +243,29 @@ export function extractVerificationCode(text: string | null, html: string | null
 
   return null
 }
+
+// 简单的 XOR 加密/解密（用于第三方邮箱密码）
+// 注意：这不是强加密，仅用于防止数据库中的明文存储
+export function encryptPassword(password: string, key: string): string {
+  const keyBytes = new TextEncoder().encode(key)
+  const passwordBytes = new TextEncoder().encode(password)
+  const encrypted = new Uint8Array(passwordBytes.length)
+
+  for (let i = 0; i < passwordBytes.length; i++) {
+    encrypted[i] = passwordBytes[i] ^ keyBytes[i % keyBytes.length]
+  }
+
+  return btoa(String.fromCharCode(...encrypted))
+}
+
+export function decryptPassword(encrypted: string, key: string): string {
+  const keyBytes = new TextEncoder().encode(key)
+  const encryptedBytes = Uint8Array.from(atob(encrypted), c => c.charCodeAt(0))
+  const decrypted = new Uint8Array(encryptedBytes.length)
+
+  for (let i = 0; i < encryptedBytes.length; i++) {
+    decrypted[i] = encryptedBytes[i] ^ keyBytes[i % keyBytes.length]
+  }
+
+  return new TextDecoder().decode(decrypted)
+}

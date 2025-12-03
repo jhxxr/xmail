@@ -1,11 +1,11 @@
 ---
 import Layout from "../layouts/Layout.astro"
-import { createDB, getUserByToken, listMailboxes, getMailboxStats } from "database"
+import { createDB, getUserByToken, listMailboxes, getMailboxStats, getMailboxServicesMap, getUserExternalAccounts, getExternalProvider } from "database"
 import { verifyToken } from "../lib/auth"
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
 import { Button } from "../components/ui/button"
 import { Badge } from "../components/ui/badge"
-import { Mail, LogOut, ChevronRight, Inbox } from "lucide-react"
+import { Mail, LogOut, ChevronRight, Inbox, ExternalLink } from "lucide-react"
 
 const db = createDB(Astro.locals.runtime.env.DB)
 const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
@@ -26,19 +26,81 @@ if (!userId) {
   return Astro.redirect("/")
 }
 
-// 获取用户的所有邮箱
-const mailboxes = await listMailboxes(db, { userId, limit: 100 })
+// 获取用户的所有邮箱和第三方账号
+const [mailboxes, externalAccounts] = await Promise.all([
+  listMailboxes(db, { userId, limit: 100 }),
+  getUserExternalAccounts(db, userId)
+])
 
-// 获取每个邮箱的统计信息
-const mailboxesWithStats = await Promise.all(
-  mailboxes.map(async (mailbox) => {
-    const stats = await getMailboxStats(db, mailbox.address)
+// 并行获取邮箱统计和服务信息
+const [mailboxesWithStats, servicesMap] = await Promise.all([
+  Promise.all(
+    mailboxes.map(async (mailbox) => {
+      const stats = await getMailboxStats(db, mailbox.address)
+      return {
+        ...mailbox,
+        stats,
+      }
+    })
+  ),
+  getMailboxServicesMap(db, mailboxes.map(m => m.address))
+])
+
+// 获取第三方账号的提供商信息
+const externalAccountsWithProvider = await Promise.all(
+  externalAccounts.map(async (account) => {
+    const provider = await getExternalProvider(db, account.providerId)
     return {
-      ...mailbox,
-      stats,
+      ...account,
+      provider,
     }
   })
 )
+
+// 按服务分组邮箱
+type ServiceGroup = {
+  key: string
+  name: string
+  mailboxes: typeof mailboxesWithStats
+}
+
+const groups: ServiceGroup[] = []
+const groupMap = new Map<string, ServiceGroup>()
+const uncategorized: typeof mailboxesWithStats = []
+
+mailboxesWithStats.forEach(mailbox => {
+  const services = servicesMap[mailbox.address] || []
+
+  if (services.length === 0) {
+    uncategorized.push(mailbox)
+  } else {
+    services.forEach(service => {
+      // 使用唯一键：templateId 或 service.id（避免未命名服务冲突）
+      const groupKey = service.isCustom
+        ? `custom:${service.id}`
+        : `template:${service.templateId}`
+
+      let group = groupMap.get(groupKey)
+      if (!group) {
+        group = {
+          key: groupKey,
+          name: service.name,
+          mailboxes: []
+        }
+        groupMap.set(groupKey, group)
+        groups.push(group)
+      }
+
+      // 避免重复添加同一个邮箱
+      if (!group.mailboxes.find(m => m.address === mailbox.address)) {
+        group.mailboxes.push(mailbox)
+      }
+    })
+  }
+})
+
+// 按服务名称排序
+groups.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
 ---
 
 <Layout title="我的邮箱">
@@ -74,48 +136,162 @@ const mailboxesWithStats = await Promise.all(
           </p>
         </Card>
       ) : (
-        <div class="space-y-4">
-          <div class="flex items-center justify-between mb-6">
+        <div class="space-y-6">
+          <div class="flex items-center justify-between mb-2">
             <p class="text-muted-foreground">
               共 <span class="font-semibold text-foreground">{mailboxesWithStats.length}</span> 个邮箱
+              {groups.length > 0 && (
+                <span class="ml-2">· {groups.length} 个服务</span>
+              )}
             </p>
           </div>
 
-          <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {mailboxesWithStats.map((mailbox) => (
-              <a href={`/?mailbox=${mailbox.address}`}>
-                <Card className="group hover:border-primary/50 hover:shadow-md transition-all cursor-pointer h-full">
-                  <CardHeader className="pb-3">
-                    <div class="flex items-start justify-between gap-2">
-                      <div class="flex-1 min-w-0">
-                        <CardTitle className="text-base font-mono truncate group-hover:text-primary transition-colors">
-                          {mailbox.address}
-                        </CardTitle>
-                        {mailbox.note && (
-                          <p class="text-xs text-muted-foreground mt-1 truncate">
-                            {mailbox.note}
-                          </p>
-                        )}
-                      </div>
-                      <ChevronRight className="h-5 w-5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    <div class="flex items-center gap-2">
-                      <Badge variant="secondary" className="font-normal">
-                        {mailbox.stats.total} 封
-                      </Badge>
-                      {mailbox.stats.unread > 0 && (
-                        <Badge variant="default" className="font-normal animate-pulse">
-                          {mailbox.stats.unread} 未读
-                        </Badge>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              </a>
-            ))}
-          </div>
+          {/* 渲染各个服务分组 */}
+          {groups.map((group, index) => (
+            <details open={index === 0} class="group/section">
+              <summary class="flex items-center gap-2 mb-4 cursor-pointer list-none outline-none select-none hover:text-primary transition-colors">
+                <ChevronRight className="h-5 w-5 text-muted-foreground transition-transform duration-200 group-open/section:rotate-90 flex-shrink-0" />
+                <span class="font-semibold text-lg">{group.name}</span>
+                <span class="ml-2 inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors bg-secondary text-secondary-foreground">
+                  {group.mailboxes.length}
+                </span>
+              </summary>
+              <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3 pl-7 border-l-2 border-muted/50 ml-2.5">
+                {group.mailboxes.map((mailbox) => (
+                  <a href={`/?mailbox=${mailbox.address}`}>
+                    <Card className="group hover:border-primary/50 hover:shadow-md transition-all cursor-pointer h-full">
+                      <CardHeader className="pb-3">
+                        <div class="flex items-start justify-between gap-2">
+                          <div class="flex-1 min-w-0">
+                            <CardTitle className="text-base font-mono truncate group-hover:text-primary transition-colors">
+                              {mailbox.address}
+                            </CardTitle>
+                            {mailbox.note && (
+                              <p class="text-xs text-muted-foreground mt-1 truncate">
+                                {mailbox.note}
+                              </p>
+                            )}
+                          </div>
+                          <ChevronRight className="h-5 w-5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+                        </div>
+                      </CardHeader>
+                      <CardContent>
+                        <div class="flex items-center gap-2">
+                          <Badge variant="secondary" className="font-normal">
+                            {mailbox.stats.total} 封
+                          </Badge>
+                          {mailbox.stats.unread > 0 && (
+                            <Badge variant="default" className="font-normal animate-pulse">
+                              {mailbox.stats.unread} 未读
+                            </Badge>
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </a>
+                ))}
+              </div>
+            </details>
+          ))}
+
+          {/* 渲染未分类分组 */}
+          {uncategorized.length > 0 && (
+            <details open={groups.length === 0} class="group/section">
+              <summary class="flex items-center gap-2 mb-4 cursor-pointer list-none outline-none select-none hover:text-primary transition-colors">
+                <ChevronRight className="h-5 w-5 text-muted-foreground transition-transform duration-200 group-open/section:rotate-90 flex-shrink-0" />
+                <span class="font-semibold text-lg text-muted-foreground">未分类</span>
+                <span class="ml-2 inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors border-input bg-background text-foreground">
+                  {uncategorized.length}
+                </span>
+              </summary>
+              <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3 pl-7 border-l-2 border-muted/50 ml-2.5">
+                {uncategorized.map((mailbox) => (
+                  <a href={`/?mailbox=${mailbox.address}`}>
+                    <Card className="group hover:border-primary/50 hover:shadow-md transition-all cursor-pointer h-full">
+                      <CardHeader className="pb-3">
+                        <div class="flex items-start justify-between gap-2">
+                          <div class="flex-1 min-w-0">
+                            <CardTitle className="text-base font-mono truncate group-hover:text-primary transition-colors">
+                              {mailbox.address}
+                            </CardTitle>
+                            {mailbox.note && (
+                              <p class="text-xs text-muted-foreground mt-1 truncate">
+                                {mailbox.note}
+                              </p>
+                            )}
+                          </div>
+                          <ChevronRight className="h-5 w-5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+                        </div>
+                      </CardHeader>
+                      <CardContent>
+                        <div class="flex items-center gap-2">
+                          <Badge variant="secondary" className="font-normal">
+                            {mailbox.stats.total} 封
+                          </Badge>
+                          {mailbox.stats.unread > 0 && (
+                            <Badge variant="default" className="font-normal animate-pulse">
+                              {mailbox.stats.unread} 未读
+                            </Badge>
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </a>
+                ))}
+              </div>
+            </details>
+          )}
+
+          {/* 第三方邮箱账号 */}
+          {externalAccountsWithProvider.length > 0 && (
+            <details open={groups.length === 0 && uncategorized.length === 0} class="group/section">
+              <summary class="flex items-center gap-2 mb-4 cursor-pointer list-none outline-none select-none hover:text-primary transition-colors">
+                <ChevronRight className="h-5 w-5 text-muted-foreground transition-transform duration-200 group-open/section:rotate-90 flex-shrink-0" />
+                <span class="font-semibold text-lg">第三方邮箱</span>
+                <span class="ml-2 inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors bg-secondary text-secondary-foreground">
+                  {externalAccountsWithProvider.length}
+                </span>
+              </summary>
+              <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3 pl-7 border-l-2 border-muted/50 ml-2.5">
+                {externalAccountsWithProvider.map((account) => (
+                  <a href={`/external/${account.id}`}>
+                    <Card className="group hover:border-primary/50 hover:shadow-md transition-all cursor-pointer h-full">
+                      <CardHeader className="pb-3">
+                        <div class="flex items-start justify-between gap-2">
+                          <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-2 mb-1">
+                              <ExternalLink className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                              <span class="text-sm font-medium text-muted-foreground truncate">
+                                {account.provider?.name}
+                              </span>
+                            </div>
+                            <CardTitle className="text-base font-mono truncate group-hover:text-primary transition-colors">
+                              {account.email}
+                            </CardTitle>
+                            {account.note && (
+                              <p class="text-xs text-muted-foreground mt-1 truncate">
+                                {account.note}
+                              </p>
+                            )}
+                          </div>
+                          <ChevronRight className="h-5 w-5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+                        </div>
+                      </CardHeader>
+                      <CardContent>
+                        <div class="flex items-center gap-2">
+                          {account.linkedMailboxAddress && (
+                            <Badge variant="outline" className="font-normal text-xs">
+                              辅助邮箱
+                            </Badge>
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </a>
+                ))}
+              </div>
+            </details>
+          )}
         </div>
       )}
     </main>

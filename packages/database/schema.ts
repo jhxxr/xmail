@@ -100,6 +100,37 @@ export const mailboxServices = sqliteTable("mailbox_services", {
   createdAt: integer("created_at").notNull(),
 })
 
+// 第三方邮箱提供商表 (如 Gmail, Outlook)
+export const externalProviders = sqliteTable("external_providers", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull().unique(),
+  loginUrl: text("login_url").notNull(),
+  icon: text("icon"),
+  note: text("note"),
+  createdAt: integer("created_at").notNull(),
+})
+
+// 第三方邮箱账号表
+export const externalAccounts = sqliteTable("external_accounts", {
+  id: text("id").primaryKey(),
+  providerId: text("provider_id").notNull().references(() => externalProviders.id, { onDelete: "cascade" }),
+  email: text("email").notNull(),
+  encryptedPassword: text("encrypted_password").notNull(),
+  linkedMailboxAddress: text("linked_mailbox_address").references(() => mailboxes.address, { onDelete: "set null" }),
+  note: text("note"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+})
+
+// 用户与第三方账号的分配关系表 (多对多)
+export const userExternalAccounts = sqliteTable("user_external_accounts", {
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  accountId: text("account_id").notNull().references(() => externalAccounts.id, { onDelete: "cascade" }),
+  assignedAt: integer("assigned_at").notNull(),
+}, (t) => ({
+  pk: { columns: [t.userId, t.accountId] },
+}))
+
 // 类型导出
 export type Admin = typeof admins.$inferSelect
 export type InsertAdmin = typeof admins.$inferInsert
@@ -115,3 +146,9 @@ export type ServiceTemplate = typeof serviceTemplates.$inferSelect
 export type InsertServiceTemplate = typeof serviceTemplates.$inferInsert
 export type MailboxService = typeof mailboxServices.$inferSelect
 export type InsertMailboxService = typeof mailboxServices.$inferInsert
+export type ExternalProvider = typeof externalProviders.$inferSelect
+export type InsertExternalProvider = typeof externalProviders.$inferInsert
+export type ExternalAccount = typeof externalAccounts.$inferSelect
+export type InsertExternalAccount = typeof externalAccounts.$inferInsert
+export type UserExternalAccount = typeof userExternalAccounts.$inferSelect
+export type InsertUserExternalAccount = typeof userExternalAccounts.$inferInsert
