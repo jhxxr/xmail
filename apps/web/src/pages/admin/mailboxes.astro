@@ -1,6 +1,6 @@
 ---
 import AdminLayout from "../../layouts/AdminLayout.astro"
-import { createDB, listMailboxes, createMailbox, createMailboxBatch, deleteMailbox, deleteMailboxesBatch, setMailboxActive, getMailboxPlainPassword, createLog, getAdminById, getMailDomain, getMailDomains, getUserById, getMailboxServicesMap, listServiceTemplates, addServiceToMailbox, addCustomServiceToMailbox, removeServiceFromMailbox } from "database"
+import { createDB, listMailboxes, createMailbox, createMailboxBatch, deleteMailbox, deleteMailboxesBatch, setMailboxActive, getMailboxPlainPassword, createLog, getAdminById, getMailDomain, getMailDomains, getUserById, getMailboxServicesMap, listServiceTemplates, addServiceToMailbox, addCustomServiceToMailbox, removeServiceFromMailbox, batchBindServicesToMailboxes } from "database"
 import { verifyToken } from "../../lib/auth"
 import { formatDate } from "../../lib/utils"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
@@ -140,6 +140,54 @@ if (Astro.request.method === "POST") {
       message = "服务已删除"
       messageType = "success"
     }
+  } else if (action === "batch_bind_services") {
+    const addresses = formData.getAll("addresses[]").map(a => a.toString()).filter(Boolean)
+    const templateIds = formData.getAll("template_ids[]").map(t => t.toString()).filter(Boolean)
+
+    // 收集自定义服务
+    const customNames = formData.getAll("custom_names[]").map(n => n.toString().trim()).filter(Boolean)
+    const customUrls = formData.getAll("custom_urls[]").map(u => u.toString().trim()).filter(Boolean)
+    const customNotes = formData.getAll("custom_notes[]").map(n => n.toString().trim())
+
+    const customServices: Array<{ name: string; loginUrl: string; note?: string }> = []
+    for (let i = 0; i < customNames.length; i++) {
+      if (customNames[i] && customUrls[i]) {
+        customServices.push({
+          name: customNames[i],
+          loginUrl: customUrls[i],
+          note: customNotes[i] || undefined,
+        })
+      }
+    }
+
+    if (addresses.length === 0) {
+      message = "请选择至少一个邮箱"
+      messageType = "error"
+    } else if (templateIds.length === 0 && customServices.length === 0) {
+      message = "请选择至少一个服务或添加自定义服务"
+      messageType = "error"
+    } else {
+      try {
+        const result = await batchBindServicesToMailboxes(db, addresses, templateIds, customServices)
+        await createLog(db, {
+          adminId: admin.id,
+          action: "batch_bind_services",
+          details: {
+            mailboxCount: addresses.length,
+            templateCount: templateIds.length,
+            customServiceCount: customServices.length,
+            successCount: result.successCount,
+            skippedCount: result.skippedCount
+          }
+        })
+
+        message = `绑定完成！成功: ${result.successCount}，跳过（已绑定）: ${result.skippedCount}`
+        messageType = "success"
+      } catch (e: any) {
+        message = `绑定失败: ${e.message}`
+        messageType = "error"
+      }
+    }
   }
 }
 
@@ -185,6 +233,10 @@ if (serviceFilters.length > 0) {
         <button id="createMailboxBtn" type="button" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-green-600 hover:bg-green-700 text-white h-9 px-4">
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2 h-4 w-4"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
           创建邮箱
+        </button>
+        <button id="batchBindServiceBtn" class="hidden inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-indigo-600 text-white hover:bg-indigo-700 h-9 px-4">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2 h-4 w-4"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+          批量绑定服务
         </button>
         <button id="exportSelectedBtn" class="hidden inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-blue-600 text-white hover:bg-blue-700 h-9 px-4">
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2 h-4 w-4"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
@@ -458,6 +510,102 @@ if (serviceFilters.length > 0) {
       </div>
     </Card>
 
+    <!-- 批量绑定服务 Modal -->
+    <div id="batchBindServiceModal" class="fixed inset-0 z-50 hidden items-center justify-center">
+      <!-- Backdrop -->
+      <div class="fixed inset-0 bg-black/50" id="batchBindBackdrop"></div>
+
+      <!-- Dialog -->
+      <div class="relative z-50 w-full max-w-2xl rounded-lg border bg-background p-6 shadow-lg max-h-[90vh] overflow-y-auto mx-4">
+        <!-- Close button -->
+        <button
+          type="button"
+          id="closeBatchBindBtn"
+          class="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-4 w-4"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          <span class="sr-only">关闭</span>
+        </button>
+
+        <div class="flex flex-col space-y-1.5 text-center sm:text-left mb-4">
+          <h2 class="text-lg font-semibold leading-none tracking-tight">批量绑定服务</h2>
+          <p class="text-sm text-muted-foreground">
+            已选择 <span id="batchBindCount" class="font-bold text-foreground">0</span> 个邮箱
+          </p>
+          <!-- Preview of selected emails -->
+          <p id="batchBindPreview" class="text-xs text-muted-foreground truncate max-w-full"></p>
+        </div>
+
+        <form method="POST" id="batchBindServiceForm" class="space-y-6">
+          <input type="hidden" name="action" value="batch_bind_services" />
+          <!-- Selected addresses will be injected here by JS -->
+          <div id="batchBindAddressesContainer"></div>
+
+          <!-- 1. Template Services Section -->
+          <div class="space-y-3 border rounded-md p-4 bg-muted/30">
+            <div class="flex items-center justify-between">
+              <label class="text-sm font-medium">选择现有服务模板</label>
+              <span class="text-xs text-muted-foreground">勾选要添加的服务</span>
+            </div>
+
+            {serviceTemplates.length === 0 ? (
+              <p class="text-sm text-muted-foreground italic">暂无服务模板</p>
+            ) : (
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {serviceTemplates.map((tpl) => (
+                  <label class="flex items-start space-x-3 space-y-0 rounded-md border p-3 hover:bg-accent cursor-pointer transition-colors bg-background">
+                    <input type="checkbox" name="template_ids[]" value={tpl.id} class="mt-1 h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary" />
+                    <div class="space-y-1 leading-none">
+                      <div class="text-sm font-medium">{tpl.name}</div>
+                      <div class="text-xs text-muted-foreground line-clamp-1" title={tpl.loginUrl}>{tpl.loginUrl}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <!-- 2. Custom Services Section -->
+          <div class="space-y-3">
+            <div class="flex items-center justify-between">
+              <label class="text-sm font-medium">添加自定义服务</label>
+              <button type="button" id="addCustomServiceRowBtn" class="inline-flex items-center text-xs font-medium text-primary hover:underline">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-1"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                添加一行
+              </button>
+            </div>
+
+            <div id="customServicesContainer" class="space-y-3">
+              <!-- Dynamic rows will appear here -->
+            </div>
+
+            <!-- Template for a row (Hidden) -->
+            <template id="customServiceRowTemplate">
+              <div class="flex flex-col sm:flex-row gap-3 items-start sm:items-center p-3 border rounded-md bg-background relative group animate-in fade-in slide-in-from-top-2 duration-200">
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full">
+                  <input type="text" name="custom_names[]" placeholder="服务名称" required class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" />
+                  <input type="text" name="custom_urls[]" placeholder="登录链接" required class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" />
+                  <input type="text" name="custom_notes[]" placeholder="备注 (可选)" class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" />
+                </div>
+                <button type="button" class="delete-row-btn absolute -right-2 -top-2 sm:static sm:right-auto sm:top-auto p-1.5 text-muted-foreground hover:text-destructive bg-background sm:bg-transparent border sm:border-0 rounded-full shadow-sm sm:shadow-none" title="删除此行">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                </button>
+              </div>
+            </template>
+          </div>
+
+          <div class="flex justify-end gap-3 pt-4 border-t">
+            <button type="button" id="cancelBatchBindBtn" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors border border-input bg-background hover:bg-accent hover:text-accent-foreground h-10 px-4 py-2">
+              取消
+            </button>
+            <button type="submit" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-primary text-primary-foreground hover:bg-primary/90 h-10 px-4 py-2">
+              确认绑定
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <!-- 创建邮箱 Modal -->
     <div id="createMailboxModal" class="fixed inset-0 z-50 hidden items-center justify-center">
       <!-- Backdrop -->
@@ -546,6 +694,82 @@ if (serviceFilters.length > 0) {
   </div>
 
   <script define:vars={{ generatedCredentials }}>
+    // --- 批量绑定服务逻辑 ---
+    const batchBindServiceBtn = document.getElementById('batchBindServiceBtn')
+    const batchBindServiceModal = document.getElementById('batchBindServiceModal')
+    const closeBatchBindBtn = document.getElementById('closeBatchBindBtn')
+    const cancelBatchBindBtn = document.getElementById('cancelBatchBindBtn')
+    const batchBindBackdrop = document.getElementById('batchBindBackdrop')
+    const batchBindAddressesContainer = document.getElementById('batchBindAddressesContainer')
+    const batchBindCount = document.getElementById('batchBindCount')
+    const batchBindPreview = document.getElementById('batchBindPreview')
+
+    // 关闭批量绑定服务模态框
+    const closeBatchBindModal = () => {
+      batchBindServiceModal?.classList.add('hidden')
+      batchBindServiceModal?.classList.remove('flex')
+      document.body.style.overflow = ''
+    }
+
+    // 关闭事件监听
+    closeBatchBindBtn?.addEventListener('click', closeBatchBindModal)
+    cancelBatchBindBtn?.addEventListener('click', closeBatchBindModal)
+    batchBindBackdrop?.addEventListener('click', closeBatchBindModal)
+
+    // 打开批量绑定服务模态框
+    batchBindServiceBtn?.addEventListener('click', () => {
+      const selectedCheckboxes = document.querySelectorAll('.mailbox-checkbox:checked')
+      if (selectedCheckboxes.length === 0) return alert('请先选择邮箱')
+
+      // 1. 更新UI计数
+      if (batchBindCount) batchBindCount.textContent = selectedCheckboxes.length.toString()
+
+      // 2. 更新预览文本
+      const addresses = Array.from(selectedCheckboxes).map(cb => cb.value)
+      if (batchBindPreview) {
+        const previewStr = addresses.slice(0, 3).join(', ')
+        batchBindPreview.textContent = addresses.length > 3 ? `${previewStr} 等...` : previewStr
+      }
+
+      // 3. 注入隐藏的地址输入框
+      if (batchBindAddressesContainer) {
+        batchBindAddressesContainer.innerHTML = ''
+        addresses.forEach(addr => {
+          const input = document.createElement('input')
+          input.type = 'hidden'
+          input.name = 'addresses[]'
+          input.value = addr
+          batchBindAddressesContainer.appendChild(input)
+        })
+      }
+
+      // 显示模态框
+      batchBindServiceModal?.classList.remove('hidden')
+      batchBindServiceModal?.classList.add('flex')
+      document.body.style.overflow = 'hidden'
+    })
+
+    // 动态自定义服务行管理
+    const addCustomServiceRowBtn = document.getElementById('addCustomServiceRowBtn')
+    const customServicesContainer = document.getElementById('customServicesContainer')
+    const rowTemplate = document.getElementById('customServiceRowTemplate')
+
+    addCustomServiceRowBtn?.addEventListener('click', () => {
+      if (!customServicesContainer || !rowTemplate) return
+
+      // 克隆模板内容
+      const clone = rowTemplate.content.cloneNode(true)
+      const row = clone.querySelector('div')
+
+      // 为删除按钮添加事件处理
+      const deleteBtn = row.querySelector('.delete-row-btn')
+      deleteBtn?.addEventListener('click', () => {
+        row.remove()
+      })
+
+      customServicesContainer.appendChild(row)
+    })
+
     // Modal 控制
     const createMailboxBtn = document.getElementById('createMailboxBtn')
     const createMailboxModal = document.getElementById('createMailboxModal')
@@ -644,9 +868,11 @@ if (serviceFilters.length > 0) {
       if (exportCountSpan) exportCountSpan.textContent = selectedCount.toString()
 
       if (selectedCount > 0) {
+        batchBindServiceBtn?.classList.remove('hidden')
         batchDeleteBtn?.classList.remove('hidden')
         exportSelectedBtn?.classList.remove('hidden')
       } else {
+        batchBindServiceBtn?.classList.add('hidden')
         batchDeleteBtn?.classList.add('hidden')
         exportSelectedBtn?.classList.add('hidden')
       }

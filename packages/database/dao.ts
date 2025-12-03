@@ -595,6 +595,74 @@ export async function removeServiceFromMailbox(db: DB, serviceId: string): Promi
   await db.delete(schema.mailboxServices).where(eq(schema.mailboxServices.id, serviceId))
 }
 
+// 批量绑定服务
+export async function batchBindServicesToMailboxes(
+  db: DB,
+  mailboxAddresses: string[],
+  templateIds: string[],
+  customServices: Array<{ name: string; loginUrl: string; note?: string }>
+): Promise<{
+  successCount: number
+  skippedCount: number
+  details: Array<{ address: string; serviceName: string; status: 'success' | 'skipped' }>
+}> {
+  if (mailboxAddresses.length === 0) {
+    return { successCount: 0, skippedCount: 0, details: [] }
+  }
+
+  // 获取所有邮箱现有的服务
+  const servicesMap = await getMailboxServicesMap(db, mailboxAddresses)
+
+  let successCount = 0
+  let skippedCount = 0
+  const details: Array<{ address: string; serviceName: string; status: 'success' | 'skipped' }> = []
+
+  // 处理模板服务
+  for (const templateId of templateIds) {
+    const template = await getServiceTemplate(db, templateId)
+    if (!template) continue
+
+    for (const address of mailboxAddresses) {
+      const existingServices = servicesMap[address] || []
+
+      // 检查是否已经绑定了该模板服务
+      const alreadyBound = existingServices.some(s => s.templateId === templateId)
+
+      if (alreadyBound) {
+        skippedCount++
+        details.push({ address, serviceName: template.name, status: 'skipped' })
+      } else {
+        await addServiceToMailbox(db, address, templateId)
+        successCount++
+        details.push({ address, serviceName: template.name, status: 'success' })
+      }
+    }
+  }
+
+  // 处理自定义服务
+  for (const customService of customServices) {
+    for (const address of mailboxAddresses) {
+      const existingServices = servicesMap[address] || []
+
+      // 检查是否已经存在同名的自定义服务
+      const alreadyBound = existingServices.some(
+        s => s.isCustom && s.name === customService.name
+      )
+
+      if (alreadyBound) {
+        skippedCount++
+        details.push({ address, serviceName: customService.name, status: 'skipped' })
+      } else {
+        await addCustomServiceToMailbox(db, address, customService)
+        successCount++
+        details.push({ address, serviceName: customService.name, status: 'success' })
+      }
+    }
+  }
+
+  return { successCount, skippedCount, details }
+}
+
 // ==================== 第三方邮箱管理 ====================
 
 // 创建第三方提供商
