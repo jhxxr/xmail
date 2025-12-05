@@ -22,7 +22,27 @@ let stats = { total: 0, unread: 0 }
 let error = ""
 let message = ""
 
-// 1. 检查 URL 参数中的 key (用户 token)
+// 1. 检查 URL 参数中的 access_token (快捷访问令牌)
+const accessToken = Astro.url.searchParams.get("access_token")
+if (accessToken) {
+  const payload = await verifyToken(accessToken, jwtSecret)
+  if (payload?.type === "user" && payload.mailbox) {
+    // 设置cookie并重定向
+    Astro.cookies.set("user_token", accessToken, {
+      httpOnly: true,
+      secure: import.meta.env.PROD,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 7, // 7天
+    })
+    // 直接重定向到该邮箱
+    return Astro.redirect(`/?mailbox=${encodeURIComponent(payload.mailbox)}`)
+  } else {
+    error = "无效的访问链接或链接已过期"
+  }
+}
+
+// 2. 检查 URL 参数中的 key (用户 token)
 const urlKey = Astro.url.searchParams.get("key")
 if (urlKey) {
   const user = await getUserByToken(db, urlKey)
@@ -43,21 +63,28 @@ if (urlKey) {
   }
 }
 
-// 2. 检查 cookie 中的 token
+// 3. 检查 cookie 中的 token
 const token = Astro.cookies.get("user_token")?.value
 let isTokenLogin = false
 if (!userId && token) {
   const payload = await verifyToken(token, jwtSecret)
   if (payload?.type === "user" && payload.id) {
-    userId = payload.id
-    isTokenLogin = true
+    // 检查是否是快捷访问token (id为"quick_access")
+    if (payload.id === "quick_access" && payload.mailbox) {
+      // 快捷访问：直接设置选中的邮箱
+      selectedMailbox = payload.mailbox
+    } else {
+      // 普通用户token
+      userId = payload.id
+      isTokenLogin = true
+    }
   } else if (payload?.type === "password" && payload.address) {
     // 密码登录，直接设置选中的邮箱
     selectedMailbox = payload.address
   }
 }
 
-// 3. 处理表单登录和操作
+// 4. 处理表单登录和操作
 let loginType = "password" // 默认登录方式
 if (Astro.request.method === "POST") {
   const formData = await Astro.request.formData()
@@ -280,6 +307,7 @@ if (selectedMailbox) {
           selectedMailbox={selectedMailbox || ""}
           stats={stats}
           services={services}
+          hasUserId={!!userId}
         />
 
         <!-- 移动端邮件列表 -->
@@ -381,6 +409,7 @@ if (selectedMailbox) {
           selectedMailbox={selectedMailbox || ""}
           stats={stats}
           services={services}
+          hasUserId={!!userId}
         />
 
         <!-- 桌面端邮件列表 -->

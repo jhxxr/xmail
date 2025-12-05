@@ -70,9 +70,12 @@ if (account.linkedMailboxAddress) {
     <!-- 顶部导航栏 -->
     <header class="bg-background border-b sticky top-0 z-10">
       <div class="container max-w-4xl mx-auto px-4 h-16 flex items-center gap-4">
-        <a href="/mailboxes" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent h-9 w-9">
+        <button
+          onclick="history.back()"
+          class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent h-9 w-9 cursor-pointer bg-transparent border-0"
+        >
           <ArrowLeft className="h-5 w-5" />
-        </a>
+        </button>
         <div class="flex-1">
           <h1 class="font-bold text-lg">{provider.name}</h1>
           <p class="text-sm text-muted-foreground">{account.email}</p>
@@ -208,8 +211,9 @@ if (account.linkedMailboxAddress) {
                 {auxiliaryEmails.map((email) => {
                   const verificationCode = extractVerificationCode(email.text, email.html)
                   return (
-                    <div class="border rounded-md p-3 hover:bg-muted/50 transition-colors">
-                      <div class="flex items-start justify-between gap-2">
+                    <div class="relative border rounded-md p-3 hover:bg-muted/50 transition-colors group">
+                      <a href={`/mail/${email.id}`} class="absolute inset-0 z-0" aria-label="查看邮件详情"></a>
+                      <div class="flex items-start justify-between gap-2 relative z-10 pointer-events-none">
                         <div class="flex-1 min-w-0">
                           <div class="flex items-center gap-2 mb-1">
                             <span class="text-sm font-medium truncate">{email.fromName || email.fromAddress}</span>
@@ -218,11 +222,11 @@ if (account.linkedMailboxAddress) {
                           <div class="text-sm truncate mb-1">{email.subject || "(无主题)"}</div>
                           <div class="text-xs text-muted-foreground truncate">{extractPreview(email.text, email.html)}</div>
                           {verificationCode && (
-                            <div class="mt-2">
+                            <div class="mt-2 pointer-events-auto">
                               <button
                                 type="button"
                                 class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-primary/10 hover:bg-primary/20 text-primary rounded-md text-xs font-mono font-semibold transition-colors border border-primary/30"
-                                onclick={`navigator.clipboard.writeText('${verificationCode}').then(() => { const original = this.innerHTML; this.innerHTML = '<span>已复制</span>'; this.classList.add('bg-green-600', 'text-white', 'border-green-600'); setTimeout(() => { this.innerHTML = original; this.classList.remove('bg-green-600', 'text-white', 'border-green-600'); }, 1500); })`}
+                                onclick={`event.stopPropagation(); navigator.clipboard.writeText('${verificationCode}').then(() => { const original = this.innerHTML; this.innerHTML = '<span>已复制</span>'; this.classList.add('bg-green-600', 'text-white', 'border-green-600'); setTimeout(() => { this.innerHTML = original; this.classList.remove('bg-green-600', 'text-white', 'border-green-600'); }, 1500); })`}
                                 title="点击复制验证码"
                               >
                                 <span>{verificationCode}</span>
@@ -231,6 +235,7 @@ if (account.linkedMailboxAddress) {
                             </div>
                           )}
                         </div>
+                        <ChevronRight className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none flex-shrink-0" />
                       </div>
                     </div>
                   )

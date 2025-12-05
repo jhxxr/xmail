@@ -1,6 +1,6 @@
 ---
 import AdminLayout from "../../layouts/AdminLayout.astro"
-import { createDB, getAdminById, listUsers, listMailboxes, getUserById, assignMailboxToUser, assignMailboxesToUser, createLog } from "database"
+import { createDB, getAdminById, listUsers, listMailboxes, getUserById, assignMailboxToUser, assignMailboxesToUser, createLog, getMailboxServicesMap, listServiceTemplates } from "database"
 import { verifyToken } from "../../lib/auth"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
 import { Button } from "../../components/ui/button"
@@ -46,10 +46,33 @@ if (Astro.request.method === "POST") {
 }
 
 const selectedUserId = Astro.url.searchParams.get("user")
+const serviceFilter = Astro.url.searchParams.get("service") // 服务筛选参数
+
 const users = await listUsers(db, { limit: 100 })
 const selectedUser = selectedUserId ? await getUserById(db, selectedUserId) : null
-const unassignedMailboxes = await listMailboxes(db, { limit: 100, unassignedOnly: true })
+let unassignedMailboxes = await listMailboxes(db, { limit: 100, unassignedOnly: true })
 const userMailboxes = selectedUserId ? await listMailboxes(db, { limit: 100, userId: selectedUserId }) : []
+
+// 获取服务模板
+const serviceTemplates = await listServiceTemplates(db)
+
+// 获取所有邮箱（未分配+用户邮箱）的服务
+const allAddresses = [
+  ...unassignedMailboxes.map(mb => mb.address),
+  ...userMailboxes.map(mb => mb.address)
+]
+const servicesMap = await getMailboxServicesMap(db, allAddresses)
+
+// 根据服务筛选未分配邮箱
+if (serviceFilter) {
+  unassignedMailboxes = unassignedMailboxes.filter(mb => {
+    const services = servicesMap[mb.address] || []
+    return services.some(s =>
+      s.templateId === serviceFilter ||
+      (s.isCustom && s.name === serviceFilter)
+    )
+  })
+}
 ---
 
 <AdminLayout title="分配管理">
@@ -114,19 +137,33 @@ const userMailboxes = selectedUserId ? await listMailboxes(db, { limit: 100, use
             </div>
           ) : (
             <div class="space-y-2 overflow-y-auto pr-2 flex-1 max-h-[400px]">
-              {userMailboxes.map((mb) => (
-                <div class="flex justify-between items-center p-3 bg-muted/50 rounded-md border">
-                  <span class="font-mono text-sm">{mb.address}</span>
-                  <form method="POST">
-                    <input type="hidden" name="action" value="unassign" />
-                    <input type="hidden" name="address" value={mb.address} />
-                    <Button variant="ghost" size="sm" className="h-8 text-destructive hover:text-destructive hover:bg-destructive/10">
-                      <Unlink className="h-4 w-4 mr-1" />
-                      取消
-                    </Button>
-                  </form>
-                </div>
-              ))}
+              {userMailboxes.map((mb) => {
+                const services = servicesMap[mb.address] || []
+                return (
+                  <div class="flex flex-col gap-2 p-3 bg-muted/50 rounded-md border">
+                    <div class="flex justify-between items-center">
+                      <span class="font-mono text-sm">{mb.address}</span>
+                      <form method="POST">
+                        <input type="hidden" name="action" value="unassign" />
+                        <input type="hidden" name="address" value={mb.address} />
+                        <Button variant="ghost" size="sm" className="h-8 text-destructive hover:text-destructive hover:bg-destructive/10">
+                          <Unlink className="h-4 w-4 mr-1" />
+                          取消
+                        </Button>
+                      </form>
+                    </div>
+                    {services.length > 0 && (
+                      <div class="flex flex-wrap gap-1">
+                        {services.map((s) => (
+                          <Badge variant="secondary" className="text-[10px] px-1.5 py-0.5 h-auto">
+                            {s.name}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           )}
         </CardContent>
@@ -143,23 +180,50 @@ const userMailboxes = selectedUserId ? await listMailboxes(db, { limit: 100, use
           </CardTitle>
         </CardHeader>
         <CardContent>
+          {/* 服务筛选器 */}
+          {serviceTemplates.length > 0 && (
+            <div class="flex flex-wrap gap-2 mb-4 pb-4 border-b">
+              <span class="text-sm text-muted-foreground">按服务筛选：</span>
+              <a href={`/admin/assign?user=${selectedUserId}`} class={`inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors h-7 px-3 ${!serviceFilter ? "bg-primary text-primary-foreground" : "border border-input bg-background hover:bg-accent hover:text-accent-foreground"}`}>
+                全部
+              </a>
+              {serviceTemplates.map((tpl) => (
+                <a href={`/admin/assign?user=${selectedUserId}&service=${tpl.id}`} class={`inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors h-7 px-3 ${serviceFilter === tpl.id ? "bg-primary text-primary-foreground" : "border border-input bg-background hover:bg-accent hover:text-accent-foreground"}`}>
+                  {tpl.name}
+                </a>
+              ))}
+            </div>
+          )}
+
           {unassignedMailboxes.length === 0 ? (
-            <p class="text-muted-foreground text-center py-8">没有未分配的邮箱，请先 <a href="/admin/mailboxes" class="text-primary underline">生成邮箱</a></p>
+            <p class="text-muted-foreground text-center py-8">{serviceFilter ? "没有绑定该服务的未分配邮箱" : "没有未分配的邮箱，请先"} <a href="/admin/mailboxes" class="text-primary underline">生成邮箱</a></p>
           ) : (
             <form method="POST">
               <input type="hidden" name="action" value="assign" />
               <input type="hidden" name="user_id" value={selectedUser.id} />
               <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 max-h-64 overflow-y-auto mb-6 p-1">
-                {unassignedMailboxes.map((mb) => (
-                  <label class="flex items-center gap-3 p-3 rounded-md border cursor-pointer hover:bg-muted transition-colors relative group">
-                    <input type="checkbox" name="addresses" value={mb.address} class="peer sr-only" />
-                    <div class="h-4 w-4 rounded border border-primary flex items-center justify-center peer-checked:bg-primary peer-checked:text-primary-foreground transition-colors">
-                      <CheckSquare className="h-3 w-3 opacity-0 peer-checked:opacity-100" />
-                    </div>
-                    <span class="font-mono text-sm truncate flex-1">{mb.address}</span>
-                    <div class="absolute inset-0 rounded-md ring-2 ring-primary opacity-0 peer-checked:opacity-100 pointer-events-none transition-opacity"></div>
-                  </label>
-                ))}
+                {unassignedMailboxes.map((mb) => {
+                  const services = servicesMap[mb.address] || []
+                  return (
+                    <label class="flex flex-col gap-2 p-3 rounded-md border cursor-pointer hover:bg-accent transition-colors relative group peer-checked:bg-accent/50">
+                      <input type="checkbox" name="addresses" value={mb.address} class="peer sr-only" />
+                      <span class="font-mono text-xs truncate">{mb.address}</span>
+                      {services.length > 0 && (
+                        <div class="flex flex-wrap gap-1">
+                          {services.slice(0, 3).map((s) => (
+                            <Badge variant="outline" className="text-[9px] px-1 py-0 h-auto border-gray-300">
+                              {s.name}
+                            </Badge>
+                          ))}
+                          {services.length > 3 && (
+                            <span class="text-[9px] text-muted-foreground">+{services.length - 3}</span>
+                          )}
+                        </div>
+                      )}
+                      <div class="absolute inset-0 rounded-md ring-2 ring-primary opacity-0 peer-checked:opacity-100 pointer-events-none transition-opacity"></div>
+                    </label>
+                  )
+                })}
               </div>
               <div class="flex gap-4">
                 <Button type="submit">

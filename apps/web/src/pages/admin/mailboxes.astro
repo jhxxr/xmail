@@ -1,7 +1,7 @@
 ---
 import AdminLayout from "../../layouts/AdminLayout.astro"
-import { createDB, listMailboxes, createMailbox, createMailboxBatch, deleteMailbox, deleteMailboxesBatch, setMailboxActive, getMailboxPlainPassword, createLog, getAdminById, getMailDomain, getMailDomains, getUserById, getMailboxServicesMap, listServiceTemplates, addServiceToMailbox, addCustomServiceToMailbox, removeServiceFromMailbox, batchBindServicesToMailboxes } from "database"
-import { verifyToken } from "../../lib/auth"
+import { createDB, listMailboxes, createMailbox, createMailboxBatch, deleteMailbox, deleteMailboxesBatch, setMailboxActive, getMailboxPlainPassword, createLog, getAdminById, getMailDomain, getMailDomains, getUserById, getMailboxServicesMap, listServiceTemplates, addServiceToMailbox, addCustomServiceToMailbox, removeServiceFromMailbox, batchBindServicesToMailboxes, listUsers, assignMailboxToUser } from "database"
+import { verifyToken, generateMailboxAccessToken } from "../../lib/auth"
 import { formatDate } from "../../lib/utils"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
 import { Button } from "../../components/ui/button"
@@ -9,7 +9,7 @@ import { Input } from "../../components/ui/input"
 import { Badge } from "../../components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "../../components/ui/dialog"
 import { ServiceManager } from "../../components/admin/ServiceManager"
-import { Mail, Power, Trash2, FileText, Plus, X, Copy, Check, Eye } from "lucide-react"
+import { Mail, Power, Trash2, FileText, Plus, X, Copy, Check, Eye, UserPlus, Link2 } from "lucide-react"
 
 const db = createDB(Astro.locals.runtime.env.DB)
 const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
@@ -188,6 +188,21 @@ if (Astro.request.method === "POST") {
         messageType = "error"
       }
     }
+  } else if (action === "assign_single") {
+    const address = formData.get("address")?.toString()
+    const userId = formData.get("user_id")?.toString()
+    if (address && userId) {
+      try {
+        await assignMailboxToUser(db, address, userId)
+        await createLog(db, { adminId: admin.id, action: "assign_mailbox", target: address, details: { userId } })
+        const user = await getUserById(db, userId)
+        message = `已将邮箱 ${address} 分配给 ${user?.name || userId.slice(0, 8)}`
+        messageType = "success"
+      } catch (e: any) {
+        message = `分配失败: ${e.message}`
+        messageType = "error"
+      }
+    }
   }
 }
 
@@ -197,6 +212,9 @@ let mailboxes = await listMailboxes(db, { limit: 100, unassignedOnly: filter ===
 
 // 获取全局服务模板
 const serviceTemplates = await listServiceTemplates(db)
+
+// 获取所有用户用于弹窗绑定
+const allUsers = await listUsers(db, { limit: 200 })
 
 // 获取用户信息
 const userCache: Record<string, string> = {}
@@ -344,7 +362,6 @@ if (serviceFilters.length > 0) {
                 <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">邮箱地址</th>
                 <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">关联服务</th>
                 <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">分配给</th>
-                <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">密码</th>
                 <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">状态</th>
                 <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">创建时间</th>
                 <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">操作</th>
@@ -352,7 +369,7 @@ if (serviceFilters.length > 0) {
             </thead>
           <tbody class="[&_tr:last-child]:border-0">
             {mailboxes.length === 0 ? (
-              <tr><td colspan="8" class="p-4 text-center text-muted-foreground">暂无邮箱</td></tr>
+              <tr><td colspan="7" class="p-4 text-center text-muted-foreground">暂无邮箱</td></tr>
             ) : (
               mailboxes.map((mb) => {
                 const services = servicesMap[mb.address] || []
@@ -375,11 +392,55 @@ if (serviceFilters.length > 0) {
                         {mb.userId ? (
                           <a href={`/admin/users`} class="text-primary hover:underline font-medium">{userCache[mb.userId]}</a>
                         ) : (
-                          <span class="text-muted-foreground">未分配</span>
+                          <Dialog>
+                            <DialogTrigger asChild>
+                              <button type="button" class="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-primary transition-colors border-b border-dashed border-gray-400 hover:border-primary">
+                                <UserPlus className="h-3 w-3" />
+                                <span>未分配</span>
+                              </button>
+                            </DialogTrigger>
+                            <DialogContent className="sm:max-w-[500px]">
+                              <DialogHeader>
+                                <DialogTitle>绑定邮箱到用户</DialogTitle>
+                                <p class="text-sm text-muted-foreground mt-1">选择要绑定的用户：{mb.address}</p>
+                              </DialogHeader>
+                              <div class="space-y-4 py-4">
+                                <Input
+                                  type="text"
+                                  placeholder="搜索用户名..."
+                                  className="user-search-input"
+                                  client:load
+                                  onInput={(e: any) => {
+                                    const term = e.target.value.toLowerCase();
+                                    const container = e.target.closest('.space-y-4').querySelector('.user-list-container');
+                                    container?.querySelectorAll('form').forEach((form: HTMLElement) => {
+                                      const text = form.textContent?.toLowerCase() || '';
+                                      form.style.display = text.includes(term) ? 'block' : 'none';
+                                    });
+                                  }}
+                                />
+                                <div class="user-list-container max-h-[300px] overflow-y-auto space-y-2">
+                                  {allUsers.map((user) => (
+                                    <form method="POST">
+                                      <input type="hidden" name="action" value="assign_single" />
+                                      <input type="hidden" name="address" value={mb.address} />
+                                      <input type="hidden" name="user_id" value={user.id} />
+                                      <button
+                                        type="submit"
+                                        class="w-full flex items-center justify-between p-3 rounded-md border hover:border-primary hover:bg-accent transition-colors text-left"
+                                      >
+                                        <span class="font-medium">{user.name || "未命名"}</span>
+                                        <span class="text-xs text-muted-foreground">
+                                          {user.note || user.token.slice(0, 12) + "..."}
+                                        </span>
+                                      </button>
+                                    </form>
+                                  ))}
+                                </div>
+                              </div>
+                            </DialogContent>
+                          </Dialog>
                         )}
-                      </td>
-                      <td class="p-4 align-middle">
-                        {mb.password ? <span class="text-green-600 font-medium">已设置</span> : <span class="text-muted-foreground">未设置</span>}
                       </td>
                       <td class="p-4 align-middle">
                         {mb.isActive ? (
@@ -394,15 +455,14 @@ if (serviceFilters.length > 0) {
                           <a href={`/admin/emails?mailbox=${encodeURIComponent(mb.address)}`} class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-8 w-8" title="查看邮件">
                             <FileText className="h-4 w-4" />
                           </a>
-                          {mb.password && (
-                            <form method="POST" class="inline">
-                              <input type="hidden" name="action" value="view_password" />
-                              <input type="hidden" name="address" value={mb.address} />
-                              <button type="submit" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-8 w-8 text-blue-600 hover:text-blue-700" title="查看密码">
-                                <Eye className="h-4 w-4" />
-                              </button>
-                            </form>
-                          )}
+                          <button
+                            type="button"
+                            class="copy-link-btn inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-8 w-8 text-blue-600 hover:text-blue-700"
+                            data-mailbox={mb.address}
+                            title="复制快捷登录链接"
+                          >
+                            <Link2 className="h-4 w-4" />
+                          </button>
                           <form method="POST" class="inline">
                             <input type="hidden" name="action" value="toggle" />
                             <input type="hidden" name="address" value={mb.address} />
@@ -448,9 +508,6 @@ if (serviceFilters.length > 0) {
                       ) : (
                         <Badge variant="secondary" className="text-xs">已禁用</Badge>
                       )}
-                      {mb.password ? (
-                        <Badge variant="outline" className="text-xs text-green-600">有密码</Badge>
-                      ) : null}
                       {mb.userId ? (
                         <Badge variant="outline" className="text-xs">{userCache[mb.userId]}</Badge>
                       ) : (
@@ -475,16 +532,14 @@ if (serviceFilters.length > 0) {
                     <FileText className="h-3 w-3 mr-1" />
                     邮件
                   </a>
-                  {mb.password && (
-                    <form method="POST" class="inline">
-                      <input type="hidden" name="action" value="view_password" />
-                      <input type="hidden" name="address" value={mb.address} />
-                      <button type="submit" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-8 text-xs text-blue-600">
-                        <Eye className="h-3 w-3 mr-1" />
-                        查看
-                      </button>
-                    </form>
-                  )}
+                  <button
+                    type="button"
+                    class="copy-link-btn inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-8 text-xs px-2 text-blue-600"
+                    data-mailbox={mb.address}
+                  >
+                    <Link2 className="h-3 w-3 mr-1" />
+                    链接
+                  </button>
                   <form method="POST" class="inline">
                     <input type="hidden" name="action" value="toggle" />
                     <input type="hidden" name="address" value={mb.address} />
@@ -982,6 +1037,49 @@ if (serviceFilters.length > 0) {
         exportSelectedBtn.disabled = false
         exportSelectedBtn.innerHTML = originalText
       }
+    })
+
+    // 复制快捷登录链接
+    document.querySelectorAll('.copy-link-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const mailbox = btn.getAttribute('data-mailbox')
+        if (!mailbox) return
+
+        const originalIcon = btn.innerHTML
+        btn.disabled = true
+
+        try {
+          // 调用API生成访问token
+          const response = await fetch('/admin/api/generate-access-link', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mailbox })
+          })
+
+          if (!response.ok) {
+            throw new Error('生成链接失败')
+          }
+
+          const { accessLink } = await response.json()
+
+          // 复制到剪贴板
+          await navigator.clipboard.writeText(accessLink)
+
+          // 显示成功状态
+          btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-green-600"><polyline points="20 6 9 17 4 12"></polyline></svg>'
+          btn.classList.add('text-green-600')
+
+          setTimeout(() => {
+            btn.innerHTML = originalIcon
+            btn.classList.remove('text-green-600')
+            btn.disabled = false
+          }, 2000)
+        } catch (err) {
+          console.error('Failed to copy link:', err)
+          alert('复制链接失败: ' + err.message)
+          btn.disabled = false
+        }
+      })
     })
 
     batchDeleteBtn?.addEventListener('click', () => {

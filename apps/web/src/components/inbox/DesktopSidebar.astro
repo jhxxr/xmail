@@ -9,9 +9,10 @@ interface Props {
   selectedMailbox: string
   stats: any
   services: any[]
+  hasUserId?: boolean
 }
 
-const { mailboxes, selectedMailbox, stats, services } = Astro.props
+const { mailboxes, selectedMailbox, stats, services, hasUserId = false } = Astro.props
 const currentFilter = Astro.url.searchParams.get("filter")
 const mailboxParam = Astro.url.searchParams.get("mailbox")
 ---
@@ -24,7 +25,7 @@ const mailboxParam = Astro.url.searchParams.get("mailbox")
         <Mail className="h-6 w-6" />
         <h1 class="text-xl font-bold tracking-tight">XMail</h1>
       </div>
-      {mailboxes.length > 1 && (
+      {hasUserId && (
         <a href="/mailboxes" class="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors">
           <ChevronLeft className="h-4 w-4" />
           <span>返回</span>

@@ -45,3 +45,12 @@ export async function generateUserToken(
 ): Promise<string> {
   return generateToken({ type: "user", id: apiKeyId, mailbox }, secret, "30d")
 }
+
+// 生成邮箱快捷访问 Token (临时访问，7天有效)
+export async function generateMailboxAccessToken(
+  mailboxAddress: string,
+  secret: string,
+  expiresIn: string = "7d"
+): Promise<string> {
+  return generateToken({ type: "user", id: "quick_access", mailbox: mailboxAddress }, secret, expiresIn)
+}

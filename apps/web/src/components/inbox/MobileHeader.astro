@@ -8,9 +8,10 @@ interface Props {
   selectedMailbox: string
   stats: any
   services: any[]
+  hasUserId?: boolean
 }
 
-const { mailboxes, selectedMailbox, stats, services } = Astro.props
+const { mailboxes, selectedMailbox, stats, services, hasUserId = false } = Astro.props
 const currentFilter = Astro.url.searchParams.get("filter")
 ---
 
@@ -27,8 +28,8 @@ const currentFilter = Astro.url.searchParams.get("filter")
 
       <div class="flex-1" />
 
-      <!-- Back Button (if multiple mailboxes) -->
-      {mailboxes.length > 1 && (
+      <!-- Back Button (if token login) -->
+      {hasUserId && (
         <a href="/mailboxes" class="flex-shrink-0">
           <button class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-9 px-3 gap-1">
             <ChevronLeft class="h-4 w-4" />
