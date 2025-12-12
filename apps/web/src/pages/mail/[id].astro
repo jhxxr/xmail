@@ -1,6 +1,6 @@
 ---
 import Layout from "../../layouts/Layout.astro"
-import { createDB, getEmail, getMailbox, markEmailAsRead, listMailboxes, getUserByToken, getUserExternalAccounts } from "database"
+import { createDB, getEmail, getMailbox, markEmailAsRead, listMailboxes, getUserByToken, getUserExternalAccounts, listSharedMailboxes } from "database"
 import { verifyToken } from "../../lib/auth"
 import { formatDate } from "../../lib/utils"
 
@@ -40,7 +40,13 @@ if (payload.mailbox) {
   const mailbox = await getMailbox(db, email.mailboxAddress)
   hasAccess = mailbox?.userId === payload.id
 
-  // 如果不是用户的直接邮箱，检查是否是第三方账号的辅助邮箱
+  // 如果不是用户的直接邮箱，检查是否是共享邮箱
+  if (!hasAccess) {
+    const sharedMailboxes = await listSharedMailboxes(db, payload.id)
+    hasAccess = sharedMailboxes.some(m => m.address === email.mailboxAddress)
+  }
+
+  // 如果不是共享邮箱，检查是否是第三方账号的辅助邮箱
   if (!hasAccess) {
     const externalAccounts = await getUserExternalAccounts(db, payload.id)
     hasAccess = externalAccounts.some(account => account.linkedMailboxAddress === email.mailboxAddress)
