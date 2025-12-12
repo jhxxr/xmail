@@ -8,18 +8,34 @@ interface DialogProps {
   children: React.ReactNode
 }
 
-export function Dialog({ open, onOpenChange, children }: DialogProps) {
+const DialogContext = React.createContext<{
+  open: boolean
+  setOpen: (open: boolean) => void
+}>({
+  open: false,
+  setOpen: () => {},
+})
+
+export function Dialog({ open: controlledOpen, onOpenChange, children }: DialogProps) {
+  const [internalOpen, setInternalOpen] = React.useState(false)
+
+  // 支持受控和非受控两种模式
+  const isControlled = controlledOpen !== undefined
+  const open = isControlled ? controlledOpen : internalOpen
+
+  const setOpen = React.useCallback((value: boolean) => {
+    if (!isControlled) {
+      setInternalOpen(value)
+    }
+    onOpenChange?.(value)
+  }, [isControlled, onOpenChange])
+
   return (
-    <DialogContext.Provider value={{ open, onOpenChange }}>
+    <DialogContext.Provider value={{ open, setOpen }}>
       {children}
     </DialogContext.Provider>
   )
 }
-
-const DialogContext = React.createContext<{
-  open?: boolean
-  onOpenChange?: (open: boolean) => void
-}>({})
 
 export function DialogTrigger({
   children,
@@ -28,10 +44,12 @@ export function DialogTrigger({
   children: React.ReactNode
   asChild?: boolean
 }) {
-  const { onOpenChange } = React.useContext(DialogContext)
+  const { setOpen } = React.useContext(DialogContext)
 
-  const handleClick = () => {
-    onOpenChange?.(true)
+  const handleClick = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setOpen(true)
   }
 
   if (asChild && React.isValidElement(children)) {
@@ -54,12 +72,12 @@ export function DialogContent({
   children: React.ReactNode
   className?: string
 }) {
-  const { open, onOpenChange } = React.useContext(DialogContext)
+  const { open, setOpen } = React.useContext(DialogContext)
 
   React.useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        onOpenChange?.(false)
+        setOpen(false)
       }
     }
 
@@ -72,7 +90,7 @@ export function DialogContent({
       document.removeEventListener("keydown", handleEscape)
       document.body.style.overflow = ""
     }
-  }, [open, onOpenChange])
+  }, [open, setOpen])
 
   if (!open) return null
 
@@ -81,13 +99,13 @@ export function DialogContent({
       {/* Backdrop */}
       <div
         className="fixed inset-0 bg-black/50"
-        onClick={() => onOpenChange?.(false)}
+        onClick={() => setOpen(false)}
       />
 
       {/* Dialog */}
       <div
         className={cn(
-          "relative z-50 w-full max-w-lg rounded-lg border bg-background p-6 shadow-lg",
+          "relative z-50 w-full max-w-lg rounded-lg border bg-background p-6 shadow-lg mx-4",
           "max-h-[90vh] overflow-y-auto",
           className
         )}
@@ -95,7 +113,7 @@ export function DialogContent({
         {children}
         <button
           type="button"
-          onClick={() => onOpenChange?.(false)}
+          onClick={() => setOpen(false)}
           className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none"
         >
           <X className="h-4 w-4" />
