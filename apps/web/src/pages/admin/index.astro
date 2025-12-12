@@ -4,7 +4,7 @@ import { createDB, getStats, getAdminById, getMailDomain } from "database"
 import { verifyToken } from "../../lib/auth"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
 import { Button } from "../../components/ui/button"
-import { Users, Mail, Link as LinkIcon, FileText, Settings } from "lucide-react"
+import { Users, Mail, FileText, Settings } from "lucide-react"
 
 const db = createDB(Astro.locals.runtime.env.DB)
 const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
@@ -100,10 +100,10 @@ const [stats, mailDomain] = await Promise.all([getStats(db), getMailDomain(db)])
               批量生成邮箱
             </Button>
           </a>
-          <a href="/admin/assign">
+          <a href="/admin/mailboxes?filter=unassigned">
             <Button variant="outline">
-              <LinkIcon className="mr-2 h-4 w-4" />
-              分配邮箱
+              <Mail className="mr-2 h-4 w-4" />
+              未分配邮箱
             </Button>
           </a>
           <a href="/admin/emails">

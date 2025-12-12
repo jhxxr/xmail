@@ -10,6 +10,7 @@ import { Badge } from "../../components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "../../components/ui/dialog"
 import { ServiceManager } from "../../components/admin/ServiceManager"
 import { SharedMailboxManager } from "../../components/admin/SharedMailboxManager"
+import { AssignUserManager } from "../../components/admin/AssignUserManager"
 import { Mail, Power, Trash2, FileText, Plus, X, Copy, Check, Eye, UserPlus, Link2, Users } from "lucide-react"
 
 const db = createDB(Astro.locals.runtime.env.DB)
@@ -220,6 +221,14 @@ if (Astro.request.method === "POST") {
         message = `分配失败: ${e.message}`
         messageType = "error"
       }
+    }
+  } else if (action === "unassign") {
+    const address = formData.get("address")?.toString()
+    if (address) {
+      await assignMailboxToUser(db, address, null)
+      await createLog(db, { adminId: admin.id, action: "unassign_mailbox", target: address })
+      message = `邮箱 ${address} 已取消分配`
+      messageType = "success"
     }
   } else if (action === "set_shared") {
     const address = formData.get("address")?.toString()
@@ -450,82 +459,14 @@ if (serviceFilters.length > 0) {
                             sharedUsers={sharedUsersMap[mb.address] || []}
                             allUsers={allUsers}
                           />
-                        ) : mb.userId ? (
-                          <a href={`/admin/users`} class="text-primary hover:underline font-medium">{userCache[mb.userId]}</a>
                         ) : (
-                          <Dialog client:load>
-                            <DialogTrigger asChild>
-                              <button type="button" class="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-primary transition-colors border-b border-dashed border-gray-400 hover:border-primary">
-                                <UserPlus className="h-3 w-3" />
-                                <span>未分配</span>
-                              </button>
-                            </DialogTrigger>
-                            <DialogContent className="sm:max-w-[500px]">
-                              <DialogHeader>
-                                <DialogTitle>绑定邮箱到用户</DialogTitle>
-                                <p class="text-sm text-muted-foreground mt-1">选择要绑定的用户：{mb.address}</p>
-                              </DialogHeader>
-                              <div class="space-y-4 py-4">
-                                <!-- 设为共享邮箱选项 -->
-                                <form method="POST" class="p-3 rounded-md border-2 border-dashed border-purple-200 hover:border-purple-400 transition-colors bg-purple-50/50">
-                                  <input type="hidden" name="action" value="set_shared" />
-                                  <input type="hidden" name="address" value={mb.address} />
-                                  <input type="hidden" name="is_shared" value="true" />
-                                  <button type="submit" class="w-full flex items-center gap-3 text-left">
-                                    <div class="p-2 bg-purple-100 rounded-md text-purple-600">
-                                      <Users className="h-4 w-4" />
-                                    </div>
-                                    <div>
-                                      <span class="font-medium text-purple-700">设为共享邮箱</span>
-                                      <p class="text-xs text-purple-600/70">可分配给多个用户</p>
-                                    </div>
-                                  </button>
-                                </form>
-
-                                <div class="relative">
-                                  <div class="absolute inset-0 flex items-center">
-                                    <span class="w-full border-t" />
-                                  </div>
-                                  <div class="relative flex justify-center text-xs uppercase">
-                                    <span class="bg-background px-2 text-muted-foreground">或分配给单个用户</span>
-                                  </div>
-                                </div>
-
-                                <Input
-                                  type="text"
-                                  placeholder="搜索用户名..."
-                                  className="user-search-input"
-                                  client:load
-                                  onInput={(e: any) => {
-                                    const term = e.target.value.toLowerCase();
-                                    const container = e.target.closest('.space-y-4').querySelector('.user-list-container');
-                                    container?.querySelectorAll('form').forEach((form: HTMLElement) => {
-                                      const text = form.textContent?.toLowerCase() || '';
-                                      form.style.display = text.includes(term) ? 'block' : 'none';
-                                    });
-                                  }}
-                                />
-                                <div class="user-list-container max-h-[200px] overflow-y-auto space-y-2">
-                                  {allUsers.map((user) => (
-                                    <form method="POST">
-                                      <input type="hidden" name="action" value="assign_single" />
-                                      <input type="hidden" name="address" value={mb.address} />
-                                      <input type="hidden" name="user_id" value={user.id} />
-                                      <button
-                                        type="submit"
-                                        class="w-full flex items-center justify-between p-3 rounded-md border hover:border-primary hover:bg-accent transition-colors text-left"
-                                      >
-                                        <span class="font-medium">{user.name || "未命名"}</span>
-                                        <span class="text-xs text-muted-foreground">
-                                          {user.note || user.token.slice(0, 12) + "..."}
-                                        </span>
-                                      </button>
-                                    </form>
-                                  ))}
-                                </div>
-                              </div>
-                            </DialogContent>
-                          </Dialog>
+                          <AssignUserManager
+                            client:load
+                            address={mb.address}
+                            allUsers={allUsers}
+                            currentUserId={mb.userId}
+                            currentUserName={mb.userId ? userCache[mb.userId] : null}
+                          />
                         )}
                       </td>
                       <td class="p-4 align-middle">
@@ -549,16 +490,6 @@ if (serviceFilters.length > 0) {
                           >
                             <Link2 className="h-4 w-4" />
                           </button>
-                          {!mb.isShared && (
-                            <form method="POST" class="inline">
-                              <input type="hidden" name="action" value="set_shared" />
-                              <input type="hidden" name="address" value={mb.address} />
-                              <input type="hidden" name="is_shared" value="true" />
-                              <button type="submit" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-purple-100 hover:text-purple-700 h-8 w-8 text-purple-500" title="设为共享邮箱">
-                                <Users className="h-4 w-4" />
-                              </button>
-                            </form>
-                          )}
                           <form method="POST" class="inline">
                             <input type="hidden" name="action" value="toggle" />
                             <input type="hidden" name="address" value={mb.address} />

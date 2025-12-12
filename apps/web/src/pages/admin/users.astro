@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/ca
 import { Button } from "../../components/ui/button"
 import { Input } from "../../components/ui/input"
 import { Badge } from "../../components/ui/badge"
-import { Copy, Trash2, UserPlus, Power, Link as LinkIcon, ExternalLink, Pencil } from "lucide-react"
+import { Copy, Trash2, UserPlus, Power, ExternalLink, Pencil, Mail } from "lucide-react"
 
 const db = createDB(Astro.locals.runtime.env.DB)
 const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
@@ -212,9 +212,9 @@ for (const user of users) {
                   </td>
                   <td class="p-4 align-middle text-muted-foreground">{user.note || "-"}</td>
                   <td class="p-4 align-middle">
-                    <a href={`/admin/assign?user=${user.id}`} class="text-primary hover:underline font-medium">
+                    <span class="text-muted-foreground font-medium">
                       {userMailboxCounts[user.id] || 0} 个
-                    </a>
+                    </span>
                   </td>
                   <td class="p-4 align-middle">
                     {user.isActive ? (
@@ -229,11 +229,6 @@ for (const user of users) {
                       <a href={`/admin/users?action=edit&id=${user.id}`} title="编辑用户">
                         <Button variant="ghost" size="icon" className="h-8 w-8">
                           <Pencil className="h-4 w-4" />
-                        </Button>
-                      </a>
-                      <a href={`/admin/assign?user=${user.id}`} title="分配邮箱">
-                        <Button variant="ghost" size="icon" className="h-8 w-8">
-                          <LinkIcon className="h-4 w-4" />
                         </Button>
                       </a>
                       <form method="POST" class="inline">
