@@ -1,4 +1,5 @@
 import * as React from "react"
+import { createPortal } from "react-dom"
 import { cn } from "../../lib/utils"
 import { X } from "lucide-react"
 
@@ -73,6 +74,11 @@ export function DialogContent({
   className?: string
 }) {
   const { open, setOpen } = React.useContext(DialogContext)
+  const [mounted, setMounted] = React.useState(false)
+
+  React.useEffect(() => {
+    setMounted(true)
+  }, [])
 
   React.useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
@@ -92,9 +98,9 @@ export function DialogContent({
     }
   }, [open, setOpen])
 
-  if (!open) return null
+  if (!open || !mounted) return null
 
-  return (
+  const content = (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       {/* Backdrop */}
       <div
@@ -109,6 +115,7 @@ export function DialogContent({
           "max-h-[90vh] overflow-y-auto",
           className
         )}
+        onClick={(e) => e.stopPropagation()}
       >
         {children}
         <button
@@ -122,6 +129,8 @@ export function DialogContent({
       </div>
     </div>
   )
+
+  return createPortal(content, document.body)
 }
 
 export function DialogHeader({
