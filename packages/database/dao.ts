@@ -190,11 +190,38 @@ export async function getMailbox(db: DB, address: string): Promise<schema.Mailbo
   return db.select().from(schema.mailboxes).where(eq(schema.mailboxes.address, address)).get() ?? null
 }
 
-export async function listMailboxes(db: DB, options: { limit?: number; offset?: number; unassignedOnly?: boolean; userId?: string } = {}): Promise<schema.Mailbox[]> {
-  const { limit = 50, offset = 0, unassignedOnly, userId } = options
+export async function listMailboxes(db: DB, options: { limit?: number; offset?: number; unassignedOnly?: boolean; userId?: string; sharedOnly?: boolean } = {}): Promise<schema.Mailbox[]> {
+  const { limit = 50, offset = 0, unassignedOnly, userId, sharedOnly } = options
+
+  // 共享邮箱单独查询
+  if (sharedOnly) {
+    return db.select().from(schema.mailboxes)
+      .where(and(
+        isNull(schema.mailboxes.deletedAt),
+        eq(schema.mailboxes.isShared, true)
+      ))
+      .orderBy(desc(schema.mailboxes.createdAt))
+      .limit(limit).offset(offset).all()
+  }
+
   let query = db.select().from(schema.mailboxes).where(isNull(schema.mailboxes.deletedAt))
-  if (unassignedOnly) query = query.where(isNull(schema.mailboxes.userId)) as typeof query
-  if (userId) query = query.where(eq(schema.mailboxes.userId, userId)) as typeof query
+
+  if (unassignedOnly) {
+    // 未分配：非共享且没有 userId，或共享但没有任何用户
+    query = query.where(and(
+      isNull(schema.mailboxes.userId),
+      eq(schema.mailboxes.isShared, false)
+    )) as typeof query
+  }
+
+  if (userId) {
+    // 非共享邮箱：直接匹配 userId
+    query = query.where(and(
+      eq(schema.mailboxes.userId, userId),
+      eq(schema.mailboxes.isShared, false)
+    )) as typeof query
+  }
+
   return query.orderBy(desc(schema.mailboxes.createdAt)).limit(limit).offset(offset).all() as Array<schema.Mailbox & { plainPassword: string | null }>
 }
 
@@ -206,6 +233,81 @@ export async function assignMailboxesToUser(db: DB, addresses: string[], userId:
   for (const address of addresses) {
     await db.update(schema.mailboxes).set({ userId }).where(eq(schema.mailboxes.address, address))
   }
+}
+
+// ============ 共享邮箱操作 ============
+
+export async function setMailboxShared(db: DB, address: string, isShared: boolean): Promise<void> {
+  const mailbox = await getMailbox(db, address)
+  if (!mailbox) return
+
+  if (isShared && !mailbox.isShared) {
+    // 从非共享转为共享：将当前 userId 迁移到 userMailboxes
+    if (mailbox.userId) {
+      await db.insert(schema.userMailboxes).values({
+        userId: mailbox.userId,
+        mailboxAddress: address,
+        assignedAt: now(),
+      }).onConflictDoNothing()
+    }
+    await db.update(schema.mailboxes).set({ isShared: true, userId: null }).where(eq(schema.mailboxes.address, address))
+  } else if (!isShared && mailbox.isShared) {
+    // 从共享转为非共享：选择第一个用户作为所有者
+    const users = await db.select().from(schema.userMailboxes).where(eq(schema.userMailboxes.mailboxAddress, address)).all()
+    const firstUserId = users.length > 0 ? users[0].userId : null
+    await db.delete(schema.userMailboxes).where(eq(schema.userMailboxes.mailboxAddress, address))
+    await db.update(schema.mailboxes).set({ isShared: false, userId: firstUserId }).where(eq(schema.mailboxes.address, address))
+  }
+}
+
+export async function assignSharedMailboxToUsers(db: DB, address: string, userIds: string[]): Promise<void> {
+  // 删除现有分配
+  await db.delete(schema.userMailboxes).where(eq(schema.userMailboxes.mailboxAddress, address))
+  // 插入新分配
+  if (userIds.length > 0) {
+    await db.insert(schema.userMailboxes).values(
+      userIds.map(userId => ({
+        userId,
+        mailboxAddress: address,
+        assignedAt: now(),
+      }))
+    )
+  }
+}
+
+export async function addUserToSharedMailbox(db: DB, address: string, userId: string): Promise<void> {
+  await db.insert(schema.userMailboxes).values({
+    userId,
+    mailboxAddress: address,
+    assignedAt: now(),
+  }).onConflictDoNothing()
+}
+
+export async function removeUserFromSharedMailbox(db: DB, address: string, userId: string): Promise<void> {
+  await db.delete(schema.userMailboxes).where(
+    and(
+      eq(schema.userMailboxes.mailboxAddress, address),
+      eq(schema.userMailboxes.userId, userId)
+    )
+  )
+}
+
+export async function getSharedMailboxUsers(db: DB, address: string): Promise<Array<{ userId: string; assignedAt: number }>> {
+  return db.select().from(schema.userMailboxes).where(eq(schema.userMailboxes.mailboxAddress, address)).all()
+}
+
+export async function listSharedMailboxes(db: DB, userId: string): Promise<schema.Mailbox[]> {
+  const assignments = await db.select().from(schema.userMailboxes).where(eq(schema.userMailboxes.userId, userId)).all()
+  if (assignments.length === 0) return []
+
+  const addresses = assignments.map(a => a.mailboxAddress)
+  return db.select().from(schema.mailboxes)
+    .where(and(
+      inArray(schema.mailboxes.address, addresses),
+      isNull(schema.mailboxes.deletedAt)
+    ))
+    .orderBy(desc(schema.mailboxes.createdAt))
+    .all()
 }
 
 export async function setMailboxPassword(db: DB, address: string, password: string): Promise<string> {
@@ -441,11 +543,12 @@ export async function deleteServiceTemplate(db: DB, id: string): Promise<void> {
 // ============ 邮箱服务关联操作 ============
 
 // 创建服务关联（引用全局模板）
-export async function addServiceToMailbox(db: DB, mailboxAddress: string, templateId: string): Promise<schema.MailboxService> {
+export async function addServiceToMailbox(db: DB, mailboxAddress: string, templateId: string, expiresAt?: number | null): Promise<schema.MailboxService> {
   const service: schema.InsertMailboxService = {
     id: nanoid(),
     mailboxAddress,
     templateId,
+    expiresAt: expiresAt ?? null,
     createdAt: now(),
   }
   await db.insert(schema.mailboxServices).values(service)
@@ -456,7 +559,7 @@ export async function addServiceToMailbox(db: DB, mailboxAddress: string, templa
 export async function addCustomServiceToMailbox(
   db: DB,
   mailboxAddress: string,
-  data: { name: string; loginUrl: string; note?: string }
+  data: { name: string; loginUrl: string; note?: string; expiresAt?: number | null }
 ): Promise<schema.MailboxService> {
   const service: schema.InsertMailboxService = {
     id: nanoid(),
@@ -465,6 +568,7 @@ export async function addCustomServiceToMailbox(
     customName: data.name,
     customLoginUrl: data.loginUrl,
     customNote: data.note,
+    expiresAt: data.expiresAt ?? null,
     createdAt: now(),
   }
   await db.insert(schema.mailboxServices).values(service)
@@ -488,6 +592,7 @@ export async function getMailboxServicesWithDetails(db: DB, mailboxAddress: stri
           note: template.note,
           isCustom: false,
           templateId: template.id,
+          expiresAt: service.expiresAt,
         })
       }
     } else {
@@ -499,6 +604,7 @@ export async function getMailboxServicesWithDetails(db: DB, mailboxAddress: stri
         note: service.customNote,
         isCustom: true,
         templateId: null,
+        expiresAt: service.expiresAt,
       })
     }
   }
@@ -543,6 +649,7 @@ export async function getMailboxServicesMap(db: DB, mailboxAddresses: string[]) 
     note: string | null
     isCustom: boolean
     templateId: string | null
+    expiresAt: number | null
   }>> = {}
 
   // 初始化所有邮箱的结果数组
@@ -562,6 +669,7 @@ export async function getMailboxServicesMap(db: DB, mailboxAddresses: string[]) 
           note: template.note,
           isCustom: false,
           templateId: template.id,
+          expiresAt: service.expiresAt,
         })
       } else {
         // 模板已被删除，显示占位符
@@ -572,6 +680,7 @@ export async function getMailboxServicesMap(db: DB, mailboxAddresses: string[]) 
           note: "该服务模板已被删除",
           isCustom: false,
           templateId: service.templateId,
+          expiresAt: service.expiresAt,
         })
       }
     } else {
@@ -583,6 +692,7 @@ export async function getMailboxServicesMap(db: DB, mailboxAddresses: string[]) 
         note: service.customNote,
         isCustom: true,
         templateId: null,
+        expiresAt: service.expiresAt,
       })
     }
   }
@@ -593,6 +703,11 @@ export async function getMailboxServicesMap(db: DB, mailboxAddresses: string[]) 
 // 删除服务关联
 export async function removeServiceFromMailbox(db: DB, serviceId: string): Promise<void> {
   await db.delete(schema.mailboxServices).where(eq(schema.mailboxServices.id, serviceId))
+}
+
+// 更新服务到期时间
+export async function updateServiceExpiration(db: DB, serviceId: string, expiresAt: number | null): Promise<void> {
+  await db.update(schema.mailboxServices).set({ expiresAt }).where(eq(schema.mailboxServices.id, serviceId))
 }
 
 // 批量绑定服务

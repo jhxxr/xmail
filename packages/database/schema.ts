@@ -23,7 +23,8 @@ export const users = sqliteTable("users", {
 // 邮箱表
 export const mailboxes = sqliteTable("mailboxes", {
   address: text("address").primaryKey(),
-  userId: text("user_id").references(() => users.id), // 分配给的用户 (null=未分配)
+  userId: text("user_id").references(() => users.id), // 分配给的用户 (null=未分配, 仅非共享邮箱使用)
+  isShared: integer("is_shared", { mode: "boolean" }).notNull().default(false), // 是否为共享邮箱
   password: text("password"), // 可选密码哈希
   salt: text("salt"),
   plainPassword: text("plain_password"), // 加密后的原始密码（可解密）
@@ -36,6 +37,15 @@ export const mailboxes = sqliteTable("mailboxes", {
   deletedAt: integer("deleted_at"), // 软删除时间戳
   deletedBy: text("deleted_by"), // 删除者（admin_id 或 user_id 或 "user"）
 })
+
+// 用户与共享邮箱的分配关系表 (多对多)
+export const userMailboxes = sqliteTable("user_mailboxes", {
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  mailboxAddress: text("mailbox_address").notNull().references(() => mailboxes.address, { onDelete: "cascade" }),
+  assignedAt: integer("assigned_at").notNull(),
+}, (t) => ({
+  pk: { columns: [t.userId, t.mailboxAddress] },
+}))
 
 // 邮件表
 export const emails = sqliteTable("emails", {
@@ -96,6 +106,8 @@ export const mailboxServices = sqliteTable("mailbox_services", {
   customName: text("custom_name"),
   customLoginUrl: text("custom_login_url"),
   customNote: text("custom_note"),
+
+  expiresAt: integer("expires_at"), // 服务到期时间（Unix 时间戳）
 
   createdAt: integer("created_at").notNull(),
 })
@@ -166,6 +178,8 @@ export type User = typeof users.$inferSelect
 export type InsertUser = typeof users.$inferInsert
 export type Mailbox = typeof mailboxes.$inferSelect
 export type InsertMailbox = typeof mailboxes.$inferInsert
+export type UserMailbox = typeof userMailboxes.$inferSelect
+export type InsertUserMailbox = typeof userMailboxes.$inferInsert
 export type Email = typeof emails.$inferSelect
 export type InsertEmail = typeof emails.$inferInsert
 export type Log = typeof logs.$inferSelect

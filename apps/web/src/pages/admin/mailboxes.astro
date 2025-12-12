@@ -1,6 +1,6 @@
 ---
 import AdminLayout from "../../layouts/AdminLayout.astro"
-import { createDB, listMailboxes, createMailbox, createMailboxBatch, deleteMailbox, deleteMailboxesBatch, setMailboxActive, getMailboxPlainPassword, createLog, getAdminById, getMailDomain, getMailDomains, getUserById, getMailboxServicesMap, listServiceTemplates, addServiceToMailbox, addCustomServiceToMailbox, removeServiceFromMailbox, batchBindServicesToMailboxes, listUsers, assignMailboxToUser } from "database"
+import { createDB, listMailboxes, createMailbox, createMailboxBatch, deleteMailbox, deleteMailboxesBatch, setMailboxActive, getMailboxPlainPassword, createLog, getAdminById, getMailDomain, getMailDomains, getUserById, getMailboxServicesMap, listServiceTemplates, addServiceToMailbox, addCustomServiceToMailbox, removeServiceFromMailbox, batchBindServicesToMailboxes, listUsers, assignMailboxToUser, updateServiceExpiration, setMailboxShared, assignSharedMailboxToUsers, getSharedMailboxUsers } from "database"
 import { verifyToken, generateMailboxAccessToken } from "../../lib/auth"
 import { formatDate } from "../../lib/utils"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
@@ -9,7 +9,7 @@ import { Input } from "../../components/ui/input"
 import { Badge } from "../../components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "../../components/ui/dialog"
 import { ServiceManager } from "../../components/admin/ServiceManager"
-import { Mail, Power, Trash2, FileText, Plus, X, Copy, Check, Eye, UserPlus, Link2 } from "lucide-react"
+import { Mail, Power, Trash2, FileText, Plus, X, Copy, Check, Eye, UserPlus, Link2, Users } from "lucide-react"
 
 const db = createDB(Astro.locals.runtime.env.DB)
 const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
@@ -37,6 +37,12 @@ function generateRandomName(): string {
   const last = lastNames[Math.floor(Math.random() * lastNames.length)]
   const num = Math.floor(Math.random() * 1000)
   return `${first}${last}${num}`
+}
+
+function parseExpiresAt(value: FormDataEntryValue | null): number | null {
+  if (!value) return null
+  const ts = Math.floor(new Date(value.toString()).getTime() / 1000)
+  return Number.isFinite(ts) && ts > 0 ? ts : null
 }
 
 // 处理表单
@@ -116,9 +122,10 @@ if (Astro.request.method === "POST") {
   } else if (action === "add_template_service") {
     const address = formData.get("address")?.toString()
     const templateId = formData.get("template_id")?.toString()
+    const expiresAt = parseExpiresAt(formData.get("expires_at"))
     if (address && templateId) {
-      await addServiceToMailbox(db, address, templateId)
-      await createLog(db, { adminId: admin.id, action: "add_service", target: address, details: { templateId } })
+      await addServiceToMailbox(db, address, templateId, expiresAt)
+      await createLog(db, { adminId: admin.id, action: "add_service", target: address, details: { templateId, expiresAt } })
       message = "服务已关联"
       messageType = "success"
     }
@@ -127,9 +134,10 @@ if (Astro.request.method === "POST") {
     const name = formData.get("service_name")?.toString()?.trim()
     const loginUrl = formData.get("service_login_url")?.toString()?.trim()
     const note = formData.get("service_note")?.toString()?.trim()
+    const expiresAt = parseExpiresAt(formData.get("expires_at"))
     if (address && name && loginUrl) {
-      await addCustomServiceToMailbox(db, address, { name, loginUrl, note })
-      await createLog(db, { adminId: admin.id, action: "add_custom_service", target: address, details: { name, loginUrl } })
+      await addCustomServiceToMailbox(db, address, { name, loginUrl, note, expiresAt })
+      await createLog(db, { adminId: admin.id, action: "add_custom_service", target: address, details: { name, loginUrl, expiresAt } })
       message = `临时服务 ${name} 已添加`
       messageType = "success"
     }
@@ -138,6 +146,15 @@ if (Astro.request.method === "POST") {
     if (serviceId) {
       await removeServiceFromMailbox(db, serviceId)
       message = "服务已删除"
+      messageType = "success"
+    }
+  } else if (action === "update_service_expiration") {
+    const serviceId = formData.get("service_id")?.toString()
+    const expiresAt = parseExpiresAt(formData.get("expires_at"))
+    if (serviceId) {
+      await updateServiceExpiration(db, serviceId, expiresAt)
+      await createLog(db, { adminId: admin.id, action: "update_service_expiration", details: { serviceId, expiresAt } })
+      message = "到期时间已更新"
       messageType = "success"
     }
   } else if (action === "batch_bind_services") {
@@ -203,6 +220,24 @@ if (Astro.request.method === "POST") {
         messageType = "error"
       }
     }
+  } else if (action === "set_shared") {
+    const address = formData.get("address")?.toString()
+    const isShared = formData.get("is_shared") === "true"
+    if (address) {
+      await setMailboxShared(db, address, isShared)
+      await createLog(db, { adminId: admin.id, action: isShared ? "set_mailbox_shared" : "set_mailbox_private", target: address })
+      message = isShared ? `邮箱 ${address} 已设为共享` : `邮箱 ${address} 已取消共享`
+      messageType = "success"
+    }
+  } else if (action === "assign_shared_users") {
+    const address = formData.get("address")?.toString()
+    const userIds = formData.getAll("user_ids[]").map(u => u.toString()).filter(Boolean)
+    if (address) {
+      await assignSharedMailboxToUsers(db, address, userIds)
+      await createLog(db, { adminId: admin.id, action: "assign_shared_mailbox", target: address, details: { userCount: userIds.length } })
+      message = `共享邮箱 ${address} 已分配给 ${userIds.length} 个用户`
+      messageType = "success"
+    }
   }
 }
 
@@ -227,6 +262,23 @@ for (const mb of mailboxes) {
 
 // 获取所有邮箱的服务
 const servicesMap = await getMailboxServicesMap(db, mailboxes.map(mb => mb.address))
+
+// 获取共享邮箱的用户列表
+const sharedUsersMap: Record<string, Array<{ userId: string; userName: string }>> = {}
+for (const mb of mailboxes) {
+  if (mb.isShared) {
+    const sharedUsers = await getSharedMailboxUsers(db, mb.address)
+    sharedUsersMap[mb.address] = await Promise.all(
+      sharedUsers.map(async (su) => {
+        const user = await getUserById(db, su.userId)
+        return {
+          userId: su.userId,
+          userName: user?.name || user?.note || su.userId.slice(0, 8)
+        }
+      })
+    )
+  }
+}
 
 // 根据服务筛选邮箱
 if (serviceFilters.length > 0) {
@@ -389,10 +441,70 @@ if (serviceFilters.length > 0) {
                         />
                       </td>
                       <td class="p-4 align-middle">
-                        {mb.userId ? (
+                        {mb.isShared ? (
+                          <!-- 共享邮箱：显示多用户和管理按钮 -->
+                          <Dialog client:load>
+                            <DialogTrigger asChild>
+                              <button type="button" class="inline-flex items-center gap-1.5 text-sm text-purple-600 hover:text-purple-700 transition-colors">
+                                <Users className="h-3.5 w-3.5" />
+                                <span class="font-medium">共享</span>
+                                {sharedUsersMap[mb.address]?.length > 0 && (
+                                  <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4">
+                                    {sharedUsersMap[mb.address].length}
+                                  </Badge>
+                                )}
+                              </button>
+                            </DialogTrigger>
+                            <DialogContent className="sm:max-w-[500px]">
+                              <DialogHeader>
+                                <DialogTitle>管理共享邮箱用户</DialogTitle>
+                                <p class="text-sm text-muted-foreground mt-1">{mb.address}</p>
+                              </DialogHeader>
+                              <form method="POST" class="space-y-4 py-4">
+                                <input type="hidden" name="action" value="assign_shared_users" />
+                                <input type="hidden" name="address" value={mb.address} />
+                                <div class="max-h-[300px] overflow-y-auto space-y-2">
+                                  {allUsers.map((user) => {
+                                    const isAssigned = sharedUsersMap[mb.address]?.some(u => u.userId === user.id)
+                                    return (
+                                      <label class="flex items-center gap-3 p-3 rounded-md border hover:bg-accent transition-colors cursor-pointer">
+                                        <input
+                                          type="checkbox"
+                                          name="user_ids[]"
+                                          value={user.id}
+                                          checked={isAssigned}
+                                          class="rounded border-gray-300"
+                                        />
+                                        <div class="flex-1">
+                                          <span class="font-medium">{user.name || "未命名"}</span>
+                                          <span class="text-xs text-muted-foreground ml-2">
+                                            {user.note || user.token.slice(0, 12) + "..."}
+                                          </span>
+                                        </div>
+                                      </label>
+                                    )
+                                  })}
+                                </div>
+                                <div class="flex justify-between pt-2">
+                                  <form method="POST" class="inline">
+                                    <input type="hidden" name="action" value="set_shared" />
+                                    <input type="hidden" name="address" value={mb.address} />
+                                    <input type="hidden" name="is_shared" value="false" />
+                                    <button type="submit" class="text-sm text-muted-foreground hover:text-destructive transition-colors">
+                                      取消共享
+                                    </button>
+                                  </form>
+                                  <button type="submit" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-primary text-primary-foreground hover:bg-primary/90 h-9 px-4">
+                                    保存
+                                  </button>
+                                </div>
+                              </form>
+                            </DialogContent>
+                          </Dialog>
+                        ) : mb.userId ? (
                           <a href={`/admin/users`} class="text-primary hover:underline font-medium">{userCache[mb.userId]}</a>
                         ) : (
-                          <Dialog>
+                          <Dialog client:load>
                             <DialogTrigger asChild>
                               <button type="button" class="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-primary transition-colors border-b border-dashed border-gray-400 hover:border-primary">
                                 <UserPlus className="h-3 w-3" />
@@ -405,6 +517,31 @@ if (serviceFilters.length > 0) {
                                 <p class="text-sm text-muted-foreground mt-1">选择要绑定的用户：{mb.address}</p>
                               </DialogHeader>
                               <div class="space-y-4 py-4">
+                                <!-- 设为共享邮箱选项 -->
+                                <form method="POST" class="p-3 rounded-md border-2 border-dashed border-purple-200 hover:border-purple-400 transition-colors bg-purple-50/50">
+                                  <input type="hidden" name="action" value="set_shared" />
+                                  <input type="hidden" name="address" value={mb.address} />
+                                  <input type="hidden" name="is_shared" value="true" />
+                                  <button type="submit" class="w-full flex items-center gap-3 text-left">
+                                    <div class="p-2 bg-purple-100 rounded-md text-purple-600">
+                                      <Users className="h-4 w-4" />
+                                    </div>
+                                    <div>
+                                      <span class="font-medium text-purple-700">设为共享邮箱</span>
+                                      <p class="text-xs text-purple-600/70">可分配给多个用户</p>
+                                    </div>
+                                  </button>
+                                </form>
+
+                                <div class="relative">
+                                  <div class="absolute inset-0 flex items-center">
+                                    <span class="w-full border-t" />
+                                  </div>
+                                  <div class="relative flex justify-center text-xs uppercase">
+                                    <span class="bg-background px-2 text-muted-foreground">或分配给单个用户</span>
+                                  </div>
+                                </div>
+
                                 <Input
                                   type="text"
                                   placeholder="搜索用户名..."
@@ -419,7 +556,7 @@ if (serviceFilters.length > 0) {
                                     });
                                   }}
                                 />
-                                <div class="user-list-container max-h-[300px] overflow-y-auto space-y-2">
+                                <div class="user-list-container max-h-[200px] overflow-y-auto space-y-2">
                                   {allUsers.map((user) => (
                                     <form method="POST">
                                       <input type="hidden" name="action" value="assign_single" />
@@ -463,6 +600,16 @@ if (serviceFilters.length > 0) {
                           >
                             <Link2 className="h-4 w-4" />
                           </button>
+                          {!mb.isShared && (
+                            <form method="POST" class="inline">
+                              <input type="hidden" name="action" value="set_shared" />
+                              <input type="hidden" name="address" value={mb.address} />
+                              <input type="hidden" name="is_shared" value="true" />
+                              <button type="submit" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-purple-100 hover:text-purple-700 h-8 w-8 text-purple-500" title="设为共享邮箱">
+                                <Users className="h-4 w-4" />
+                              </button>
+                            </form>
+                          )}
                           <form method="POST" class="inline">
                             <input type="hidden" name="action" value="toggle" />
                             <input type="hidden" name="address" value={mb.address} />
@@ -527,7 +674,7 @@ if (serviceFilters.length > 0) {
                   />
                 </div>
 
-                <div class="flex items-center gap-1 pt-2 border-t">
+                <div class="flex items-center gap-1 pt-2 border-t flex-wrap">
                   <a href={`/admin/emails?mailbox=${encodeURIComponent(mb.address)}`} class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-8 text-xs px-2">
                     <FileText className="h-3 w-3 mr-1" />
                     邮件
@@ -540,6 +687,17 @@ if (serviceFilters.length > 0) {
                     <Link2 className="h-3 w-3 mr-1" />
                     链接
                   </button>
+                  {!mb.isShared && (
+                    <form method="POST" class="inline">
+                      <input type="hidden" name="action" value="set_shared" />
+                      <input type="hidden" name="address" value={mb.address} />
+                      <input type="hidden" name="is_shared" value="true" />
+                      <button type="submit" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-purple-100 h-8 text-xs px-2 text-purple-500">
+                        <Users className="h-3 w-3 mr-1" />
+                        共享
+                      </button>
+                    </form>
+                  )}
                   <form method="POST" class="inline">
                     <input type="hidden" name="action" value="toggle" />
                     <input type="hidden" name="address" value={mb.address} />
