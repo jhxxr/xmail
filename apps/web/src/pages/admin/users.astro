@@ -1,13 +1,13 @@
 ---
 import AdminLayout from "../../layouts/AdminLayout.astro"
-import { createDB, getAdminById, listUsers, createUser, deleteUser, updateUser, createLog, listMailboxes } from "database"
+import { createDB, getAdminById, listUsers, createUser, deleteUser, updateUser, createLog, listMailboxes, getUserById } from "database"
 import { verifyToken } from "../../lib/auth"
 import { formatDate } from "../../lib/utils"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
 import { Button } from "../../components/ui/button"
 import { Input } from "../../components/ui/input"
 import { Badge } from "../../components/ui/badge"
-import { Copy, Trash2, UserPlus, Power, Link as LinkIcon, ExternalLink } from "lucide-react"
+import { Copy, Trash2, UserPlus, Power, Link as LinkIcon, ExternalLink, Pencil } from "lucide-react"
 
 const db = createDB(Astro.locals.runtime.env.DB)
 const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
@@ -52,11 +52,35 @@ if (Astro.request.method === "POST") {
       await createLog(db, { adminId: admin.id, action: isActive ? "disable_user" : "enable_user", target: id })
       message = `用户已${isActive ? "禁用" : "启用"}`
     }
+  } else if (action === "edit") {
+    const id = formData.get("id")?.toString()
+    const name = formData.get("name")?.toString()?.trim()
+    const note = formData.get("note")?.toString()?.trim()
+    if (id) {
+      await updateUser(db, id, { name, note })
+      await createLog(db, { adminId: admin.id, action: "update_user", target: id, details: { name, note } })
+      return Astro.redirect("/admin/users?msg=updated")
+    }
   }
 }
 
 const users = await listUsers(db, { limit: 100 })
-const showCreateForm = Astro.url.searchParams.get("action") === "create"
+
+// 处理编辑模式
+const urlAction = Astro.url.searchParams.get("action")
+const editId = Astro.url.searchParams.get("id")
+let editUser = null
+if (urlAction === "edit" && editId) {
+  editUser = await getUserById(db, editId)
+}
+const showCreateForm = urlAction === "create"
+const showEditForm = urlAction === "edit" && !!editUser
+
+// 处理重定向后的消息
+if (Astro.url.searchParams.get("msg") === "updated") {
+  message = "用户更新成功"
+  messageType = "success"
+}
 
 // 获取每个用户的邮箱数量
 const userMailboxCounts: Record<string, number> = {}
@@ -70,9 +94,9 @@ for (const user of users) {
   <div class="space-y-6">
     <div class="flex justify-between items-center">
       <h1 class="text-3xl font-bold tracking-tight">用户管理</h1>
-      <a href={showCreateForm ? "/admin/users" : "/admin/users?action=create"}>
+      <a href={(showCreateForm || showEditForm) ? "/admin/users" : "/admin/users?action=create"}>
         <Button>
-          {showCreateForm ? "返回列表" : <><UserPlus className="mr-2 h-4 w-4" /> 创建用户</>}
+          {(showCreateForm || showEditForm) ? "返回列表" : <><UserPlus className="mr-2 h-4 w-4" /> 创建用户</>}
         </Button>
       </a>
     </div>
@@ -107,6 +131,34 @@ for (const user of users) {
               <Input type="text" name="note" placeholder="例如: 朋友" />
             </div>
             <Button type="submit">创建用户</Button>
+          </form>
+        </CardContent>
+      </Card>
+    )}
+
+    {showEditForm && editUser && (
+      <Card>
+        <CardHeader>
+          <CardTitle>编辑用户</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form method="POST" class="space-y-4 max-w-lg">
+            <input type="hidden" name="action" value="edit" />
+            <input type="hidden" name="id" value={editUser.id} />
+            <div class="space-y-2">
+              <label class="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">用户名称</label>
+              <Input type="text" name="name" value={editUser.name || ""} placeholder="例如: 张三" />
+            </div>
+            <div class="space-y-2">
+              <label class="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">备注</label>
+              <Input type="text" name="note" value={editUser.note || ""} placeholder="例如: 朋友" />
+            </div>
+            <div class="flex gap-2">
+              <Button type="submit">保存更改</Button>
+              <a href="/admin/users">
+                <Button type="button" variant="outline">取消</Button>
+              </a>
+            </div>
           </form>
         </CardContent>
       </Card>
@@ -174,6 +226,11 @@ for (const user of users) {
                   <td class="p-4 align-middle text-muted-foreground">{formatDate(user.createdAt)}</td>
                   <td class="p-4 align-middle">
                     <div class="flex gap-2">
+                      <a href={`/admin/users?action=edit&id=${user.id}`} title="编辑用户">
+                        <Button variant="ghost" size="icon" className="h-8 w-8">
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                      </a>
                       <a href={`/admin/assign?user=${user.id}`} title="分配邮箱">
                         <Button variant="ghost" size="icon" className="h-8 w-8">
                           <LinkIcon className="h-4 w-4" />
