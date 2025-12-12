@@ -38,11 +38,31 @@ export const POST: APIRoute = async ({ request, locals, cookies }) => {
     const mailbox = await getMailbox(db, address)
 
     // 检查权限
-    if (!mailbox || mailbox.userId !== userId) {
+    if (!mailbox) {
       return new Response(JSON.stringify({ error: "Mailbox not found or access denied" }), {
         status: 403,
         headers: { "Content-Type": "application/json" }
       })
+    }
+
+    // 区分两种 token 类型
+    const isQuickAccess = payload.id === "quick_access"
+    if (isQuickAccess) {
+      // 快速访问 token: 只能访问 token 中指定的邮箱
+      if (payload.mailbox !== address) {
+        return new Response(JSON.stringify({ error: "Mailbox not found or access denied" }), {
+          status: 403,
+          headers: { "Content-Type": "application/json" }
+        })
+      }
+    } else {
+      // 普通用户 token: 检查邮箱是否属于该用户
+      if (mailbox.userId !== userId) {
+        return new Response(JSON.stringify({ error: "Mailbox not found or access denied" }), {
+          status: 403,
+          headers: { "Content-Type": "application/json" }
+        })
+      }
     }
 
     // 获取密码

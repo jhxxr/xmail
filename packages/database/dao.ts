@@ -884,3 +884,65 @@ export async function getExternalAccountServicesMap(db: DB, accountIds: string[]
 export async function removeServiceFromExternalAccount(db: DB, serviceId: string): Promise<void> {
   await db.delete(schema.externalAccountServices).where(eq(schema.externalAccountServices.id, serviceId))
 }
+
+// ============ API Key 操作 ============
+
+function generateApiKey(): { fullKey: string; prefix: string; secret: string } {
+  const prefix = nanoid(8)
+  const secret = nanoid(32)
+  const fullKey = `sk_live_${prefix}.${secret}`
+  return { fullKey, prefix, secret }
+}
+
+export async function createApiKey(db: DB, name: string): Promise<{ apiKey: schema.ApiKey; fullKey: string }> {
+  const { fullKey, prefix, secret } = generateApiKey()
+  const salt = generateSalt()
+  const keyHash = await hashPassword(secret, salt)
+
+  const apiKey: schema.InsertApiKey = {
+    id: nanoid(),
+    name,
+    keyPrefix: prefix,
+    keyHash,
+    salt,
+    createdAt: now(),
+  }
+
+  await db.insert(schema.apiKeys).values(apiKey)
+  return { apiKey: apiKey as schema.ApiKey, fullKey }
+}
+
+export async function verifyApiKey(db: DB, fullKey: string): Promise<schema.ApiKey | null> {
+  if (!fullKey.startsWith("sk_live_")) return null
+
+  const parts = fullKey.replace("sk_live_", "").split(".")
+  if (parts.length !== 2) return null
+
+  const [prefix, secret] = parts
+  const apiKey = await db.select().from(schema.apiKeys)
+    .where(and(
+      eq(schema.apiKeys.keyPrefix, prefix),
+      isNull(schema.apiKeys.revokedAt)
+    ))
+    .get()
+
+  if (!apiKey) return null
+
+  const hash = await hashPassword(secret, apiKey.salt)
+  if (hash !== apiKey.keyHash) return null
+
+  await db.update(schema.apiKeys).set({ lastUsedAt: now() }).where(eq(schema.apiKeys.id, apiKey.id))
+  return apiKey
+}
+
+export async function listApiKeys(db: DB): Promise<schema.ApiKey[]> {
+  return db.select().from(schema.apiKeys).orderBy(desc(schema.apiKeys.createdAt)).all()
+}
+
+export async function revokeApiKey(db: DB, id: string): Promise<void> {
+  await db.update(schema.apiKeys).set({ revokedAt: now() }).where(eq(schema.apiKeys.id, id))
+}
+
+export async function deleteApiKey(db: DB, id: string): Promise<void> {
+  await db.delete(schema.apiKeys).where(eq(schema.apiKeys.id, id))
+}

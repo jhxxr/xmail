@@ -147,6 +147,18 @@ export const externalAccountServices = sqliteTable("external_account_services", 
   createdAt: integer("created_at").notNull(),
 })
 
+// API 密钥表
+export const apiKeys = sqliteTable("api_keys", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  keyPrefix: text("key_prefix").notNull().unique(),
+  keyHash: text("key_hash").notNull(),
+  salt: text("salt").notNull(),
+  createdAt: integer("created_at").notNull(),
+  lastUsedAt: integer("last_used_at"),
+  revokedAt: integer("revoked_at"),
+})
+
 // 类型导出
 export type Admin = typeof admins.$inferSelect
 export type InsertAdmin = typeof admins.$inferInsert
@@ -170,3 +182,5 @@ export type UserExternalAccount = typeof userExternalAccounts.$inferSelect
 export type InsertUserExternalAccount = typeof userExternalAccounts.$inferInsert
 export type ExternalAccountService = typeof externalAccountServices.$inferSelect
 export type InsertExternalAccountService = typeof externalAccountServices.$inferInsert
+export type ApiKey = typeof apiKeys.$inferSelect
+export type InsertApiKey = typeof apiKeys.$inferInsert

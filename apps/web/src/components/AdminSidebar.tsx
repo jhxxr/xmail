@@ -11,7 +11,8 @@ import {
   Globe,
   Trash2,
   X,
-  ExternalLink
+  ExternalLink,
+  Key
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -29,6 +30,7 @@ const menuItems = [
   { href: '/admin/assign', icon: LinkIcon, label: '分配管理' },
   { href: '/admin/emails', icon: FileText, label: '邮件查看' },
   { href: '/admin/logs', icon: FileText, label: '操作日志' },
+  { href: '/admin/api-keys', icon: Key, label: 'API Key 管理' },
   { href: '/admin/settings', icon: Settings, label: '系统设置' },
 ];
 
