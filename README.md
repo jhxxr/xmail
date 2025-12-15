@@ -314,6 +314,5 @@ Claude 会自动调用 `create_mailboxes_batch`、`get_verification_code` 等工
 
 - **[API.md](API.md)** - REST API 完整参考（验证码 API、MCP API、安全说明、脚本示例）
 - **[MCP.md](MCP.md)** - MCP 协议使用指南（AI Agent 工作流、批量注册自动化、高级用法）
-- **[CLAUDE.md](CLAUDE.md)** - 开发者指南（架构详解、开发命令、技术细节）
 
 如需更多改造（例如加入 Webhook、批量导出、GraphQL API 等），可直接在 `packages/database` 扩展 schema，并在 Worker/Web 中复用同一套 DAO。
