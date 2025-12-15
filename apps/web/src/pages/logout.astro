@@ -1,0 +1,5 @@
+---
+// 用户退出登录
+Astro.cookies.delete("user_token", { path: "/" })
+return Astro.redirect("/")
+---

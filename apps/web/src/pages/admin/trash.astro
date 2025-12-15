@@ -1,0 +1,228 @@
+---
+import AdminLayout from "../../layouts/AdminLayout.astro"
+import { createDB, getAdminById, listDeletedMailboxes, restoreMailbox, deleteMailboxPermanently, createLog, getUserById, countDeletedMailboxes } from "database"
+import { verifyToken } from "../../lib/auth"
+import { formatDate } from "../../lib/utils"
+import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
+import { Badge } from "../../components/ui/badge"
+import { Trash2, RefreshCw, AlertTriangle } from "lucide-react"
+
+const db = createDB(Astro.locals.runtime.env.DB)
+const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
+
+// 验证登录
+const token = Astro.cookies.get("admin_token")?.value
+if (!token) return Astro.redirect("/admin/login")
+const payload = await verifyToken(token, jwtSecret)
+if (!payload || payload.type !== "admin") return Astro.redirect("/admin/login")
+const admin = await getAdminById(db, payload.id)
+if (!admin) return Astro.redirect("/admin/login")
+
+let message = ""
+let messageType: "success" | "error" = "success"
+
+// 处理表单
+if (Astro.request.method === "POST") {
+  const formData = await Astro.request.formData()
+  const action = formData.get("action")?.toString()
+
+  if (action === "restore") {
+    const address = formData.get("address")?.toString()
+    if (address) {
+      await restoreMailbox(db, address)
+      await createLog(db, { adminId: admin.id, action: "restore_mailbox", target: address })
+      message = `邮箱 ${address} 已恢复`
+      messageType = "success"
+    }
+  } else if (action === "delete_permanently") {
+    const address = formData.get("address")?.toString()
+    if (address) {
+      await deleteMailboxPermanently(db, address)
+      await createLog(db, { adminId: admin.id, action: "delete_mailbox_permanently", target: address })
+      message = `邮箱 ${address} 已永久删除`
+      messageType = "success"
+    }
+  } else if (action === "empty_trash") {
+    const deletedMailboxes = await listDeletedMailboxes(db, { limit: 1000 })
+    for (const mb of deletedMailboxes) {
+      await deleteMailboxPermanently(db, mb.address)
+    }
+    await createLog(db, { adminId: admin.id, action: "empty_trash", details: { count: deletedMailboxes.length } })
+    message = `已清空回收站，永久删除 ${deletedMailboxes.length} 个邮箱`
+    messageType = "success"
+  }
+}
+
+const deletedMailboxes = await listDeletedMailboxes(db, { limit: 100 })
+const totalCount = await countDeletedMailboxes(db)
+
+// 获取用户信息和删除者信息
+const userCache: Record<string, string> = {}
+const deleterCache: Record<string, string> = {}
+
+for (const mb of deletedMailboxes) {
+  if (mb.userId && !userCache[mb.userId]) {
+    const user = await getUserById(db, mb.userId)
+    userCache[mb.userId] = user?.name || user?.note || mb.userId.slice(0, 8)
+  }
+  if (mb.deletedBy && !deleterCache[mb.deletedBy]) {
+    if (mb.deletedBy === "user") {
+      deleterCache[mb.deletedBy] = "用户自己"
+    } else {
+      const deleter = await getAdminById(db, mb.deletedBy)
+      if (deleter) {
+        deleterCache[mb.deletedBy] = `管理员: ${deleter.username}`
+      } else {
+        const user = await getUserById(db, mb.deletedBy)
+        deleterCache[mb.deletedBy] = user ? `用户: ${user.name || user.note || mb.deletedBy.slice(0, 8)}` : mb.deletedBy.slice(0, 8)
+      }
+    }
+  }
+}
+---
+
+<AdminLayout title="回收站">
+  <div class="space-y-6">
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+      <div>
+        <h1 class="text-2xl md:text-3xl font-bold tracking-tight">回收站</h1>
+        <p class="text-muted-foreground mt-1 text-sm">已删除的邮箱可以在此恢复或永久删除</p>
+      </div>
+      {totalCount > 0 && (
+        <form method="POST" onsubmit="return confirm('确定要清空回收站吗？所有邮箱将被永久删除且无法恢复！')">
+          <input type="hidden" name="action" value="empty_trash" />
+          <button type="submit" class="inline-flex items-center justify-center whitespace-nowrap rounded-full text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-destructive text-destructive-foreground hover:bg-destructive/90 h-9 rounded-md px-3">
+            <Trash2 className="mr-2 h-4 w-4" />
+            清空回收站
+          </button>
+        </form>
+      )}
+    </div>
+
+    {message && (
+      <div class={`p-4 rounded-md border ${messageType === "success" ? "bg-green-50 text-green-900 border-green-200" : "bg-red-50 text-red-900 border-red-200"}`}>
+        {message}
+      </div>
+    )}
+
+    {totalCount > 0 && (
+      <div class="bg-yellow-50 text-yellow-800 p-4 rounded-md border border-yellow-200 flex items-start gap-3">
+        <AlertTriangle className="h-5 w-5 mt-0.5 flex-shrink-0" />
+        <div class="text-sm">
+          <p class="font-medium">注意事项</p>
+          <ul class="list-disc list-inside mt-2 space-y-1">
+            <li>回收站中的邮箱可以被恢复到正常状态</li>
+            <li>永久删除后将无法恢复，包括所有邮件内容</li>
+            <li>清空回收站将永久删除所有已删除的邮箱</li>
+          </ul>
+        </div>
+      </div>
+    )}
+
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-lg md:text-xl">已删除的邮箱 ({totalCount})</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {deletedMailboxes.length === 0 ? (
+          <div class="text-center py-12 text-muted-foreground">
+            <Trash2 className="h-12 w-12 mx-auto mb-4 opacity-50" />
+            <p>回收站为空</p>
+          </div>
+        ) : (
+          <>
+            {/* 桌面端表格视图 */}
+            <div class="hidden md:block relative w-full overflow-auto">
+              <table class="w-full caption-bottom text-sm">
+                <thead class="[&_tr]:border-b">
+                  <tr class="border-b transition-colors hover:bg-muted/50">
+                    <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">邮箱地址</th>
+                    <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">分配给</th>
+                    <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">删除者</th>
+                    <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">删除时间</th>
+                    <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">操作</th>
+                  </tr>
+                </thead>
+                <tbody class="[&_tr:last-child]:border-0">
+                  {deletedMailboxes.map((mb) => (
+                    <tr class="border-b transition-colors hover:bg-muted/50">
+                      <td class="p-4 align-middle font-mono">{mb.address}</td>
+                      <td class="p-4 align-middle">
+                        {mb.userId ? (
+                          <span class="font-medium">{userCache[mb.userId]}</span>
+                        ) : (
+                          <span class="text-muted-foreground">未分配</span>
+                        )}
+                      </td>
+                      <td class="p-4 align-middle">
+                        <span class="text-muted-foreground text-sm">
+                          {mb.deletedBy ? deleterCache[mb.deletedBy] || mb.deletedBy.slice(0, 8) : "-"}
+                        </span>
+                      </td>
+                      <td class="p-4 align-middle text-muted-foreground">
+                        {mb.deletedAt ? formatDate(mb.deletedAt) : "-"}
+                      </td>
+                      <td class="p-4 align-middle">
+                        <div class="flex gap-2">
+                          <form method="POST" class="inline">
+                            <input type="hidden" name="action" value="restore" />
+                            <input type="hidden" name="address" value={mb.address} />
+                            <button type="submit" class="inline-flex items-center justify-center whitespace-nowrap rounded-full text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 hover:bg-accent hover:text-accent-foreground h-10 w-10 text-green-600 hover:text-green-700" title="恢复">
+                              <RefreshCw className="h-4 w-4" />
+                            </button>
+                          </form>
+                          <form method="POST" class="inline" onsubmit="return confirm('确定要永久删除吗？此操作无法撤销！')">
+                            <input type="hidden" name="action" value="delete_permanently" />
+                            <input type="hidden" name="address" value={mb.address} />
+                            <button type="submit" class="inline-flex items-center justify-center whitespace-nowrap rounded-full text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 hover:bg-accent hover:text-accent-foreground h-10 w-10 text-destructive hover:text-destructive" title="永久删除">
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </form>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* 移动端卡片视图 */}
+            <div class="md:hidden divide-y -mx-6">
+              {deletedMailboxes.map((mb) => (
+                <div class="p-4 space-y-2">
+                  <p class="font-mono text-sm truncate">{mb.address}</p>
+                  <div class="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                    <span>分配: {mb.userId ? userCache[mb.userId] : "未分配"}</span>
+                    <span>•</span>
+                    <span>删除者: {mb.deletedBy ? deleterCache[mb.deletedBy] || mb.deletedBy.slice(0, 8) : "-"}</span>
+                  </div>
+                  <div class="text-xs text-muted-foreground">
+                    删除时间: {mb.deletedAt ? formatDate(mb.deletedAt) : "-"}
+                  </div>
+                  <div class="flex gap-2 pt-2">
+                    <form method="POST" class="inline">
+                      <input type="hidden" name="action" value="restore" />
+                      <input type="hidden" name="address" value={mb.address} />
+                      <button type="submit" class="inline-flex items-center justify-center whitespace-nowrap rounded-full text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input bg-background hover:bg-accent hover:text-accent-foreground h-8 rounded-md px-3 text-xs text-green-600">
+                        <RefreshCw className="h-3 w-3 mr-1" />
+                        恢复
+                      </button>
+                    </form>
+                    <form method="POST" class="inline" onsubmit="return confirm('确定要永久删除吗？此操作无法撤销！')">
+                      <input type="hidden" name="action" value="delete_permanently" />
+                      <input type="hidden" name="address" value={mb.address} />
+                      <button type="submit" class="inline-flex items-center justify-center whitespace-nowrap rounded-full text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input bg-background hover:bg-accent hover:text-accent-foreground h-8 rounded-md px-3 text-xs text-destructive">
+                        <Trash2 className="h-3 w-3 mr-1" />
+                        永久删除
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  </div>
+</AdminLayout>

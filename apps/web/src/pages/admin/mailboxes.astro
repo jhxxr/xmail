@@ -1,0 +1,1130 @@
+---
+import AdminLayout from "../../layouts/AdminLayout.astro"
+import { createDB, listMailboxes, createMailbox, createMailboxBatch, deleteMailbox, deleteMailboxesBatch, setMailboxActive, getMailboxPlainPassword, createLog, getAdminById, getMailDomain, getMailDomains, getUserById, getMailboxServicesMap, listServiceTemplates, addServiceToMailbox, addCustomServiceToMailbox, removeServiceFromMailbox, batchBindServicesToMailboxes, listUsers, assignMailboxToUser, updateServiceExpiration, setMailboxShared, assignSharedMailboxToUsers, getSharedMailboxUsers } from "database"
+import { verifyToken, generateMailboxAccessToken } from "../../lib/auth"
+import { formatDate } from "../../lib/utils"
+import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
+import { Button } from "../../components/ui/button"
+import { Input } from "../../components/ui/input"
+import { Badge } from "../../components/ui/badge"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "../../components/ui/dialog"
+import { ServiceManager } from "../../components/admin/ServiceManager"
+import { SharedMailboxManager } from "../../components/admin/SharedMailboxManager"
+import { AssignUserManager } from "../../components/admin/AssignUserManager"
+import { Mail, Power, Trash2, FileText, Plus, X, Copy, Check, Eye, UserPlus, Link2, Users } from "lucide-react"
+
+const db = createDB(Astro.locals.runtime.env.DB)
+const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
+
+// 验证登录
+const token = Astro.cookies.get("admin_token")?.value
+if (!token) return Astro.redirect("/admin/login")
+const payload = await verifyToken(token, jwtSecret)
+if (!payload || payload.type !== "admin") return Astro.redirect("/admin/login")
+const admin = await getAdminById(db, payload.id)
+if (!admin) return Astro.redirect("/admin/login")
+
+const [defaultDomain, mailDomains] = await Promise.all([getMailDomain(db), getMailDomains(db)])
+
+let message = ""
+let messageType: "success" | "error" = "success"
+let generatedCredentials: Array<{ address: string; password: string }> = []
+
+// 随机人名生成
+const firstNames = ["happy", "swift", "bright", "calm", "cool", "fresh", "kind", "neat", "warm", "wise", "lucky", "sunny", "star", "moon", "sky", "cloud", "rain", "snow", "wind", "fire"]
+const lastNames = ["cat", "dog", "bird", "fish", "fox", "bear", "deer", "owl", "wolf", "duck", "lion", "tiger", "panda", "koala", "rabbit", "mouse", "horse", "sheep", "goat", "pig"]
+
+function generateRandomName(): string {
+  const first = firstNames[Math.floor(Math.random() * firstNames.length)]
+  const last = lastNames[Math.floor(Math.random() * lastNames.length)]
+  const num = Math.floor(Math.random() * 1000)
+  return `${first}${last}${num}`
+}
+
+function parseExpiresAt(value: FormDataEntryValue | null): number | null {
+  if (!value) return null
+  const ts = Math.floor(new Date(value.toString()).getTime() / 1000)
+  return Number.isFinite(ts) && ts > 0 ? ts : null
+}
+
+// 处理表单
+if (Astro.request.method === "POST") {
+  const formData = await Astro.request.formData()
+  const action = formData.get("action")?.toString()
+
+  if (action === "single_create") {
+    const localPart = formData.get("local_part")?.toString()?.toLowerCase()?.trim()
+    const domain = formData.get("domain")?.toString() || defaultDomain
+    const note = formData.get("note")?.toString()?.trim()
+    if (localPart && domain) {
+      const address = `${localPart}@${domain}`
+      try {
+        const { mailbox, password } = await createMailbox(db, address, { note, createdBy: admin.id })
+        await createLog(db, { adminId: admin.id, action: "create_mailbox", target: address })
+        generatedCredentials = [{ address, password }]
+        message = `邮箱 ${address} 创建成功`
+        messageType = "success"
+      } catch (e: any) {
+        message = e.message?.includes("UNIQUE") ? `邮箱 ${address} 已存在` : `创建失败: ${e.message}`
+        messageType = "error"
+      }
+    }
+  } else if (action === "batch_create") {
+    const count = parseInt(formData.get("count")?.toString() || "10")
+    const domain = formData.get("domain")?.toString() || defaultDomain
+    const addresses: string[] = []
+    for (let i = 0; i < Math.min(count, 100); i++) {
+      addresses.push(`${generateRandomName()}@${domain}`)
+    }
+    try {
+      generatedCredentials = await createMailboxBatch(db, addresses, admin.id)
+      await createLog(db, { adminId: admin.id, action: "batch_create_mailbox", details: { count: addresses.length, domain } })
+      message = `成功创建 ${addresses.length} 个邮箱`
+      messageType = "success"
+    } catch (e: any) {
+      message = `创建失败: ${e.message}`
+      messageType = "error"
+    }
+  } else if (action === "delete") {
+    const address = formData.get("address")?.toString()
+    if (address) {
+      await deleteMailbox(db, address, admin.id)
+      await createLog(db, { adminId: admin.id, action: "delete_mailbox", target: address })
+      message = `邮箱 ${address} 已移至回收站`
+    }
+  } else if (action === "batch_delete") {
+    const addresses = formData.getAll("addresses[]").map(a => a.toString()).filter(Boolean)
+    if (addresses.length > 0) {
+      await deleteMailboxesBatch(db, addresses, admin.id)
+      await createLog(db, { adminId: admin.id, action: "batch_delete_mailbox", details: { count: addresses.length } })
+      message = `已将 ${addresses.length} 个邮箱移至回收站`
+      messageType = "success"
+    }
+  } else if (action === "toggle") {
+    const address = formData.get("address")?.toString()
+    const isActive = formData.get("is_active") === "true"
+    if (address) {
+      await setMailboxActive(db, address, !isActive)
+      await createLog(db, { adminId: admin.id, action: isActive ? "disable_mailbox" : "enable_mailbox", target: address })
+      message = `邮箱已${isActive ? "禁用" : "启用"}`
+    }
+  } else if (action === "view_password") {
+    const address = formData.get("address")?.toString()
+    if (address) {
+      const password = await getMailboxPlainPassword(db, address)
+      if (password) {
+        generatedCredentials = [{ address, password }]
+        message = `邮箱 ${address} 的密码`
+        messageType = "success"
+      } else {
+        message = `邮箱 ${address} 未设置密码或密码无法恢复`
+        messageType = "error"
+      }
+    }
+  } else if (action === "add_template_service") {
+    const address = formData.get("address")?.toString()
+    const templateId = formData.get("template_id")?.toString()
+    const expiresAt = parseExpiresAt(formData.get("expires_at"))
+    if (address && templateId) {
+      await addServiceToMailbox(db, address, templateId, expiresAt)
+      await createLog(db, { adminId: admin.id, action: "add_service", target: address, details: { templateId, expiresAt } })
+      message = "服务已关联"
+      messageType = "success"
+    }
+  } else if (action === "add_custom_service") {
+    const address = formData.get("address")?.toString()
+    const name = formData.get("service_name")?.toString()?.trim()
+    const loginUrl = formData.get("service_login_url")?.toString()?.trim()
+    const note = formData.get("service_note")?.toString()?.trim()
+    const expiresAt = parseExpiresAt(formData.get("expires_at"))
+    if (address && name && loginUrl) {
+      await addCustomServiceToMailbox(db, address, { name, loginUrl, note, expiresAt })
+      await createLog(db, { adminId: admin.id, action: "add_custom_service", target: address, details: { name, loginUrl, expiresAt } })
+      message = `临时服务 ${name} 已添加`
+      messageType = "success"
+    }
+  } else if (action === "delete_service") {
+    const serviceId = formData.get("service_id")?.toString()
+    if (serviceId) {
+      await removeServiceFromMailbox(db, serviceId)
+      message = "服务已删除"
+      messageType = "success"
+    }
+  } else if (action === "update_service_expiration") {
+    const serviceId = formData.get("service_id")?.toString()
+    const expiresAt = parseExpiresAt(formData.get("expires_at"))
+    if (serviceId) {
+      await updateServiceExpiration(db, serviceId, expiresAt)
+      await createLog(db, { adminId: admin.id, action: "update_service_expiration", details: { serviceId, expiresAt } })
+      message = "到期时间已更新"
+      messageType = "success"
+    }
+  } else if (action === "batch_bind_services") {
+    const addresses = formData.getAll("addresses[]").map(a => a.toString()).filter(Boolean)
+    const templateIds = formData.getAll("template_ids[]").map(t => t.toString()).filter(Boolean)
+
+    // 收集自定义服务
+    const customNames = formData.getAll("custom_names[]").map(n => n.toString().trim()).filter(Boolean)
+    const customUrls = formData.getAll("custom_urls[]").map(u => u.toString().trim()).filter(Boolean)
+    const customNotes = formData.getAll("custom_notes[]").map(n => n.toString().trim())
+
+    const customServices: Array<{ name: string; loginUrl: string; note?: string }> = []
+    for (let i = 0; i < customNames.length; i++) {
+      if (customNames[i] && customUrls[i]) {
+        customServices.push({
+          name: customNames[i],
+          loginUrl: customUrls[i],
+          note: customNotes[i] || undefined,
+        })
+      }
+    }
+
+    if (addresses.length === 0) {
+      message = "请选择至少一个邮箱"
+      messageType = "error"
+    } else if (templateIds.length === 0 && customServices.length === 0) {
+      message = "请选择至少一个服务或添加自定义服务"
+      messageType = "error"
+    } else {
+      try {
+        const result = await batchBindServicesToMailboxes(db, addresses, templateIds, customServices)
+        await createLog(db, {
+          adminId: admin.id,
+          action: "batch_bind_services",
+          details: {
+            mailboxCount: addresses.length,
+            templateCount: templateIds.length,
+            customServiceCount: customServices.length,
+            successCount: result.successCount,
+            skippedCount: result.skippedCount
+          }
+        })
+
+        message = `绑定完成！成功: ${result.successCount}，跳过（已绑定）: ${result.skippedCount}`
+        messageType = "success"
+      } catch (e: any) {
+        message = `绑定失败: ${e.message}`
+        messageType = "error"
+      }
+    }
+  } else if (action === "assign_single") {
+    const address = formData.get("address")?.toString()
+    const userId = formData.get("user_id")?.toString()
+    if (address && userId) {
+      try {
+        await assignMailboxToUser(db, address, userId)
+        await createLog(db, { adminId: admin.id, action: "assign_mailbox", target: address, details: { userId } })
+        const user = await getUserById(db, userId)
+        message = `已将邮箱 ${address} 分配给 ${user?.name || userId.slice(0, 8)}`
+        messageType = "success"
+      } catch (e: any) {
+        message = `分配失败: ${e.message}`
+        messageType = "error"
+      }
+    }
+  } else if (action === "unassign") {
+    const address = formData.get("address")?.toString()
+    if (address) {
+      await assignMailboxToUser(db, address, null)
+      await createLog(db, { adminId: admin.id, action: "unassign_mailbox", target: address })
+      message = `邮箱 ${address} 已取消分配`
+      messageType = "success"
+    }
+  } else if (action === "set_shared") {
+    const address = formData.get("address")?.toString()
+    const isShared = formData.get("is_shared") === "true"
+    if (address) {
+      await setMailboxShared(db, address, isShared)
+      await createLog(db, { adminId: admin.id, action: isShared ? "set_mailbox_shared" : "set_mailbox_private", target: address })
+      message = isShared ? `邮箱 ${address} 已设为共享` : `邮箱 ${address} 已取消共享`
+      messageType = "success"
+    }
+  } else if (action === "assign_shared_users") {
+    const address = formData.get("address")?.toString()
+    const userIds = formData.getAll("user_ids[]").map(u => u.toString()).filter(Boolean)
+    if (address) {
+      await assignSharedMailboxToUsers(db, address, userIds)
+      await createLog(db, { adminId: admin.id, action: "assign_shared_mailbox", target: address, details: { userCount: userIds.length } })
+      message = `共享邮箱 ${address} 已分配给 ${userIds.length} 个用户`
+      messageType = "success"
+    }
+  }
+}
+
+const filter = Astro.url.searchParams.get("filter")
+const serviceFilters = Astro.url.searchParams.getAll("service") // 服务筛选（多选）
+let mailboxes = await listMailboxes(db, { limit: 100, unassignedOnly: filter === "unassigned" })
+
+// 获取全局服务模板
+const serviceTemplates = await listServiceTemplates(db)
+
+// 获取所有用户用于弹窗绑定
+const allUsers = await listUsers(db, { limit: 200 })
+
+// 获取用户信息
+const userCache: Record<string, string> = {}
+for (const mb of mailboxes) {
+  if (mb.userId && !userCache[mb.userId]) {
+    const user = await getUserById(db, mb.userId)
+    userCache[mb.userId] = user?.name || user?.note || mb.userId.slice(0, 8)
+  }
+}
+
+// 获取所有邮箱的服务
+const servicesMap = await getMailboxServicesMap(db, mailboxes.map(mb => mb.address))
+
+// 获取共享邮箱的用户列表
+const sharedUsersMap: Record<string, Array<{ userId: string; userName: string }>> = {}
+for (const mb of mailboxes) {
+  if (mb.isShared) {
+    const sharedUsers = await getSharedMailboxUsers(db, mb.address)
+    sharedUsersMap[mb.address] = await Promise.all(
+      sharedUsers.map(async (su) => {
+        const user = await getUserById(db, su.userId)
+        return {
+          userId: su.userId,
+          userName: user?.name || user?.note || su.userId.slice(0, 8)
+        }
+      })
+    )
+  }
+}
+
+// 根据服务筛选邮箱
+if (serviceFilters.length > 0) {
+  mailboxes = mailboxes.filter(mb => {
+    const services = servicesMap[mb.address] || []
+    // 检查是否包含任一选中的服务
+    return serviceFilters.some(filterId =>
+      services.some(s =>
+        s.templateId === filterId ||
+        (s.isCustom && s.name === filterId)
+      )
+    )
+  })
+}
+---
+
+<AdminLayout title="邮箱管理">
+  <div class="space-y-6">
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+      <h1 class="text-2xl md:text-3xl font-bold tracking-tight">邮箱管理</h1>
+      <div class="flex flex-wrap gap-2">
+        <button id="createMailboxBtn" type="button" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-green-600 hover:bg-green-700 text-white h-9 px-4">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2 h-4 w-4"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+          创建邮箱
+        </button>
+        <button id="batchBindServiceBtn" class="hidden inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-indigo-600 text-white hover:bg-indigo-700 h-9 px-4">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2 h-4 w-4"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+          批量绑定服务
+        </button>
+        <button id="exportSelectedBtn" class="hidden inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-blue-600 text-white hover:bg-blue-700 h-9 px-4">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2 h-4 w-4"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+          导出选中 (<span id="exportCount">0</span>)
+        </button>
+        <button id="batchDeleteBtn" class="hidden inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-destructive text-destructive-foreground hover:bg-destructive/90 h-9 px-4">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2 h-4 w-4"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+          删除选中 (<span id="selectedCount">0</span>)
+        </button>
+      </div>
+    </div>
+
+    <!-- 筛选器 -->
+    <div class="flex flex-wrap gap-2 items-center">
+      <span class="text-sm text-muted-foreground">筛选：</span>
+      <a href="/admin/mailboxes">
+        <button type="button" class={`inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors h-8 px-3 ${!filter && serviceFilters.length === 0 ? "bg-primary text-primary-foreground" : "border border-input bg-background hover:bg-accent hover:text-accent-foreground"}`}>
+          全部
+        </button>
+      </a>
+      <a href="/admin/mailboxes?filter=unassigned">
+        <button type="button" class={`inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors h-8 px-3 ${filter === "unassigned" ? "bg-primary text-primary-foreground" : "border border-input bg-background hover:bg-accent hover:text-accent-foreground"}`}>
+          未分配
+        </button>
+      </a>
+
+      {serviceTemplates.length > 0 && (
+        <>
+          <span class="text-sm text-muted-foreground ml-2">服务：</span>
+          {serviceTemplates.map((tpl) => {
+            const isSelected = serviceFilters.includes(tpl.id)
+            const currentParams = new URLSearchParams(Astro.url.search)
+            if (isSelected) {
+              // 移除该服务筛选
+              const newServices = serviceFilters.filter(s => s !== tpl.id)
+              currentParams.delete("service")
+              newServices.forEach(s => currentParams.append("service", s))
+            } else {
+              // 添加该服务筛选
+              currentParams.append("service", tpl.id)
+            }
+            const newUrl = `/admin/mailboxes${currentParams.toString() ? "?" + currentParams.toString() : ""}`
+            return (
+              <a href={newUrl}>
+                <button type="button" class={`inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors h-8 px-3 ${isSelected ? "bg-primary text-primary-foreground" : "border border-input bg-background hover:bg-accent hover:text-accent-foreground"}`}>
+                  {tpl.name}
+                </button>
+              </a>
+            )
+          })}
+        </>
+      )}
+    </div>
+
+    {message && (
+      <div class={`p-4 rounded-md border ${messageType === "success" ? "bg-green-50 text-green-900 border-green-200" : "bg-red-50 text-red-900 border-red-200"}`}>
+        {message}
+        {generatedCredentials.length > 0 && (
+          <div class="mt-3 space-y-2">
+            <div class="max-h-64 overflow-y-auto border rounded bg-white">
+              <table class="w-full text-sm">
+                <thead class="bg-gray-50 sticky top-0">
+                  <tr>
+                    <th class="px-3 py-2 text-left font-medium">邮箱地址</th>
+                    <th class="px-3 py-2 text-left font-medium">密码</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y">
+                  {generatedCredentials.map((cred) => (
+                    <tr>
+                      <td class="px-3 py-2 font-mono text-xs">{cred.address}</td>
+                      <td class="px-3 py-2 font-mono text-xs">{cred.password}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div class="flex gap-2">
+              <button type="button" id="downloadCredentialsBtn" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-green-600 bg-green-700 text-white h-9 px-3">
+                <Copy className="h-4 w-4 mr-1" />
+                下载 CSV
+              </button>
+              <button type="button" id="copyAllCredentialsBtn" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors border border-input bg-background hover:bg-accent hover:text-accent-foreground h-9 px-3">
+                <Copy className="h-4 w-4 mr-1" />
+                复制全部
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    )}
+
+    <!-- 邮箱列表 -->
+    <Card>
+      <!-- 桌面端表格视图 -->
+      <div class="hidden md:block relative w-full overflow-auto">
+        <form method="POST" id="batchDeleteForm">
+          <input type="hidden" name="action" value="batch_delete" />
+          <table class="w-full caption-bottom text-sm">
+            <thead class="[&_tr]:border-b">
+              <tr class="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted">
+                <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground w-12">
+                  <input type="checkbox" id="selectAll" class="rounded border-gray-300" />
+                </th>
+                <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">邮箱地址</th>
+                <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">关联服务</th>
+                <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">分配给</th>
+                <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">状态</th>
+                <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">创建时间</th>
+                <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">操作</th>
+              </tr>
+            </thead>
+          <tbody class="[&_tr:last-child]:border-0">
+            {mailboxes.length === 0 ? (
+              <tr><td colspan="7" class="p-4 text-center text-muted-foreground">暂无邮箱</td></tr>
+            ) : (
+              mailboxes.map((mb) => {
+                const services = servicesMap[mb.address] || []
+                return (
+                  <>
+                    <tr class={`border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted ${!mb.isActive ? "opacity-60" : ""}`}>
+                      <td class="p-4 align-middle">
+                        <input type="checkbox" name="addresses[]" value={mb.address} class="mailbox-checkbox rounded border-gray-300" />
+                      </td>
+                      <td class="p-4 align-middle font-mono">{mb.address}</td>
+                      <td class="p-4 align-middle">
+                        <ServiceManager
+                          client:load
+                          mailbox={mb.address}
+                          initialServices={services}
+                          templates={serviceTemplates}
+                        />
+                      </td>
+                      <td class="p-4 align-middle">
+                        {mb.isShared ? (
+                          <!-- 共享邮箱：显示多用户和管理按钮 -->
+                          <SharedMailboxManager
+                            client:load
+                            address={mb.address}
+                            sharedUsers={sharedUsersMap[mb.address] || []}
+                            allUsers={allUsers}
+                          />
+                        ) : (
+                          <AssignUserManager
+                            client:load
+                            address={mb.address}
+                            allUsers={allUsers}
+                            currentUserId={mb.userId}
+                            currentUserName={mb.userId ? userCache[mb.userId] : null}
+                          />
+                        )}
+                      </td>
+                      <td class="p-4 align-middle">
+                        {mb.isActive ? (
+                          <Badge variant="success">活跃</Badge>
+                        ) : (
+                          <Badge variant="secondary">已禁用</Badge>
+                        )}
+                      </td>
+                      <td class="p-4 align-middle text-muted-foreground">{formatDate(mb.createdAt)}</td>
+                      <td class="p-4 align-middle">
+                        <div class="flex gap-2">
+                          <a href={`/admin/emails?mailbox=${encodeURIComponent(mb.address)}`} class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-8 w-8" title="查看邮件">
+                            <FileText className="h-4 w-4" />
+                          </a>
+                          <button
+                            type="button"
+                            class="copy-link-btn inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-8 w-8 text-blue-600 hover:text-blue-700"
+                            data-mailbox={mb.address}
+                            title="复制快捷登录链接"
+                          >
+                            <Link2 className="h-4 w-4" />
+                          </button>
+                          <form method="POST" class="inline">
+                            <input type="hidden" name="action" value="toggle" />
+                            <input type="hidden" name="address" value={mb.address} />
+                            <input type="hidden" name="is_active" value={String(mb.isActive)} />
+                            <button type="submit" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-8 w-8 text-orange-500 hover:text-orange-600" title={mb.isActive ? "禁用" : "启用"}>
+                              <Power className="h-4 w-4" />
+                            </button>
+                          </form>
+                          <form method="POST" class="inline" onsubmit="return confirm('确定删除？邮箱将移至回收站，可在回收站中恢复。')">
+                            <input type="hidden" name="action" value="delete" />
+                            <input type="hidden" name="address" value={mb.address} />
+                            <button type="submit" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-8 w-8 text-destructive hover:text-destructive" title="删除">
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </form>
+                        </div>
+                      </td>
+                    </tr>
+                  </>
+                )
+              })
+            )}
+          </tbody>
+        </table>
+        </form>
+      </div>
+
+      <!-- 移动端卡片视图 -->
+      <div class="md:hidden divide-y">
+        {mailboxes.length === 0 ? (
+          <div class="p-4 text-center text-muted-foreground">暂无邮箱</div>
+        ) : (
+          mailboxes.map((mb) => {
+            const services = servicesMap[mb.address] || []
+            return (
+              <div class={`p-4 space-y-3 ${!mb.isActive ? "opacity-60" : ""}`}>
+                <div class="flex items-start justify-between gap-2">
+                  <div class="min-w-0 flex-1">
+                    <p class="font-mono text-sm truncate">{mb.address}</p>
+                    <div class="flex flex-wrap gap-1 mt-1">
+                      {mb.isActive ? (
+                        <Badge variant="success" className="text-xs">活跃</Badge>
+                      ) : (
+                        <Badge variant="secondary" className="text-xs">已禁用</Badge>
+                      )}
+                      {mb.userId ? (
+                        <Badge variant="outline" className="text-xs">{userCache[mb.userId]}</Badge>
+                      ) : (
+                        <Badge variant="secondary" className="text-xs">未分配</Badge>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div class="space-y-2">
+                  <div class="text-xs text-muted-foreground font-medium">关联服务</div>
+                  <ServiceManager
+                    client:load
+                    mailbox={mb.address}
+                    initialServices={services}
+                    templates={serviceTemplates}
+                  />
+                </div>
+
+                <div class="flex items-center gap-1 pt-2 border-t flex-wrap">
+                  <a href={`/admin/emails?mailbox=${encodeURIComponent(mb.address)}`} class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-8 text-xs px-2">
+                    <FileText className="h-3 w-3 mr-1" />
+                    邮件
+                  </a>
+                  <button
+                    type="button"
+                    class="copy-link-btn inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-8 text-xs px-2 text-blue-600"
+                    data-mailbox={mb.address}
+                  >
+                    <Link2 className="h-3 w-3 mr-1" />
+                    链接
+                  </button>
+                  {!mb.isShared && (
+                    <form method="POST" class="inline">
+                      <input type="hidden" name="action" value="set_shared" />
+                      <input type="hidden" name="address" value={mb.address} />
+                      <input type="hidden" name="is_shared" value="true" />
+                      <button type="submit" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-purple-100 h-8 text-xs px-2 text-purple-500">
+                        <Users className="h-3 w-3 mr-1" />
+                        共享
+                      </button>
+                    </form>
+                  )}
+                  <form method="POST" class="inline">
+                    <input type="hidden" name="action" value="toggle" />
+                    <input type="hidden" name="address" value={mb.address} />
+                    <input type="hidden" name="is_active" value={String(mb.isActive)} />
+                    <button type="submit" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-8 text-xs text-orange-500">
+                      <Power className="h-3 w-3 mr-1" />
+                      {mb.isActive ? "禁用" : "启用"}
+                    </button>
+                  </form>
+                  <form method="POST" class="inline" onsubmit="return confirm('确定删除？邮箱将移至回收站。')">
+                    <input type="hidden" name="action" value="delete" />
+                    <input type="hidden" name="address" value={mb.address} />
+                    <button type="submit" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-8 text-xs text-destructive">
+                      <Trash2 className="h-3 w-3 mr-1" />
+                      删除
+                    </button>
+                  </form>
+                </div>
+              </div>
+            )
+          })
+        )}
+      </div>
+    </Card>
+
+    <!-- 批量绑定服务 Modal -->
+    <div id="batchBindServiceModal" class="fixed inset-0 z-50 hidden items-center justify-center">
+      <!-- Backdrop -->
+      <div class="fixed inset-0 bg-black/50" id="batchBindBackdrop"></div>
+
+      <!-- Dialog -->
+      <div class="relative z-50 w-full max-w-2xl rounded-lg border bg-background p-6 shadow-lg max-h-[90vh] overflow-y-auto mx-4">
+        <!-- Close button -->
+        <button
+          type="button"
+          id="closeBatchBindBtn"
+          class="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-4 w-4"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          <span class="sr-only">关闭</span>
+        </button>
+
+        <div class="flex flex-col space-y-1.5 text-center sm:text-left mb-4">
+          <h2 class="text-lg font-semibold leading-none tracking-tight">批量绑定服务</h2>
+          <p class="text-sm text-muted-foreground">
+            已选择 <span id="batchBindCount" class="font-bold text-foreground">0</span> 个邮箱
+          </p>
+          <!-- Preview of selected emails -->
+          <p id="batchBindPreview" class="text-xs text-muted-foreground truncate max-w-full"></p>
+        </div>
+
+        <form method="POST" id="batchBindServiceForm" class="space-y-6">
+          <input type="hidden" name="action" value="batch_bind_services" />
+          <!-- Selected addresses will be injected here by JS -->
+          <div id="batchBindAddressesContainer"></div>
+
+          <!-- 1. Template Services Section -->
+          <div class="space-y-3 border rounded-md p-4 bg-muted/30">
+            <div class="flex items-center justify-between">
+              <label class="text-sm font-medium">选择现有服务模板</label>
+              <span class="text-xs text-muted-foreground">勾选要添加的服务</span>
+            </div>
+
+            {serviceTemplates.length === 0 ? (
+              <p class="text-sm text-muted-foreground italic">暂无服务模板</p>
+            ) : (
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {serviceTemplates.map((tpl) => (
+                  <label class="flex items-start space-x-3 space-y-0 rounded-md border p-3 hover:bg-accent cursor-pointer transition-colors bg-background">
+                    <input type="checkbox" name="template_ids[]" value={tpl.id} class="mt-1 h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary" />
+                    <div class="space-y-1 leading-none">
+                      <div class="text-sm font-medium">{tpl.name}</div>
+                      <div class="text-xs text-muted-foreground line-clamp-1" title={tpl.loginUrl}>{tpl.loginUrl}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <!-- 2. Custom Services Section -->
+          <div class="space-y-3">
+            <div class="flex items-center justify-between">
+              <label class="text-sm font-medium">添加自定义服务</label>
+              <button type="button" id="addCustomServiceRowBtn" class="inline-flex items-center text-xs font-medium text-primary hover:underline">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-1"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                添加一行
+              </button>
+            </div>
+
+            <div id="customServicesContainer" class="space-y-3">
+              <!-- Dynamic rows will appear here -->
+            </div>
+
+            <!-- Template for a row (Hidden) -->
+            <template id="customServiceRowTemplate">
+              <div class="flex flex-col sm:flex-row gap-3 items-start sm:items-center p-3 border rounded-md bg-background relative group animate-in fade-in slide-in-from-top-2 duration-200">
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full">
+                  <input type="text" name="custom_names[]" placeholder="服务名称" required class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" />
+                  <input type="text" name="custom_urls[]" placeholder="登录链接" required class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" />
+                  <input type="text" name="custom_notes[]" placeholder="备注 (可选)" class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" />
+                </div>
+                <button type="button" class="delete-row-btn absolute -right-2 -top-2 sm:static sm:right-auto sm:top-auto p-1.5 text-muted-foreground hover:text-destructive bg-background sm:bg-transparent border sm:border-0 rounded-full shadow-sm sm:shadow-none" title="删除此行">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                </button>
+              </div>
+            </template>
+          </div>
+
+          <div class="flex justify-end gap-3 pt-4 border-t">
+            <button type="button" id="cancelBatchBindBtn" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors border border-input bg-background hover:bg-accent hover:text-accent-foreground h-10 px-4 py-2">
+              取消
+            </button>
+            <button type="submit" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-primary text-primary-foreground hover:bg-primary/90 h-10 px-4 py-2">
+              确认绑定
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- 创建邮箱 Modal -->
+    <div id="createMailboxModal" class="fixed inset-0 z-50 hidden items-center justify-center">
+      <!-- Backdrop -->
+      <div class="fixed inset-0 bg-black/50" id="modalBackdrop"></div>
+
+      <!-- Dialog -->
+      <div class="relative z-50 w-full max-w-lg rounded-lg border bg-background p-6 shadow-lg max-h-[90vh] overflow-y-auto mx-4">
+        <!-- Close button -->
+        <button
+          type="button"
+          id="closeModalBtn"
+          class="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-4 w-4"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          <span class="sr-only">关闭</span>
+        </button>
+
+        <!-- Dialog Header -->
+        <div class="flex flex-col space-y-1.5 text-center sm:text-left mb-4">
+          <h2 class="text-lg font-semibold leading-none tracking-tight">创建邮箱</h2>
+        </div>
+
+        {mailDomains.length === 0 ? (
+          <div class="bg-yellow-50 text-yellow-700 p-3 rounded">
+            请先在 <a href="/admin/settings" class="underline">系统设置</a> 中添加邮箱域名
+          </div>
+        ) : (
+          <>
+            <!-- 模式切换 -->
+            <div class="flex gap-2 mb-4">
+              <button
+                type="button"
+                id="singleModeBtn"
+                class="flex-1 inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors h-9 px-4 bg-primary text-primary-foreground"
+              >
+                单个创建
+              </button>
+              <button
+                type="button"
+                id="batchModeBtn"
+                class="flex-1 inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors h-9 px-4 border border-input bg-background hover:bg-accent hover:text-accent-foreground"
+              >
+                批量生成
+              </button>
+            </div>
+
+            <!-- 单个创建表单 -->
+            <form method="POST" id="singleCreateForm" class="space-y-4">
+              <input type="hidden" name="action" value="single_create" />
+              <div class="space-y-2">
+                <label class="text-sm font-medium leading-none">邮箱地址</label>
+                <div class="flex">
+                  <input type="text" name="local_part" required placeholder="username" class="flex h-10 w-full rounded-l-md border border-r-0 border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50" />
+                  <span class="px-3 py-2 bg-muted border-y border-input text-muted-foreground flex items-center">@</span>
+                  <select name="domain" class="px-3 py-2 border-y border-r border-input rounded-r-md bg-background">
+                    {mailDomains.map((d) => <option value={d} selected={d === defaultDomain}>{d}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div class="space-y-2">
+                <label class="text-sm font-medium leading-none">备注（可选）</label>
+                <input type="text" name="note" placeholder="备注" class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50" />
+              </div>
+              <button type="submit" class="w-full inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-green-600 hover:bg-green-700 text-white h-10 px-4 py-2">创建</button>
+            </form>
+
+            <!-- 批量生成表单 -->
+            <form method="POST" id="batchCreateForm" class="space-y-4 hidden">
+              <input type="hidden" name="action" value="batch_create" />
+              <div class="space-y-2">
+                <label class="text-sm font-medium leading-none">数量</label>
+                <input type="number" name="count" value="10" min="1" max="100" class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50" />
+              </div>
+              <div class="space-y-2">
+                <label class="text-sm font-medium leading-none">域名</label>
+                <select name="domain" class="w-full h-10 px-3 py-2 border border-input rounded-md bg-background">
+                  {mailDomains.map((d) => <option value={d} selected={d === defaultDomain}>{d}</option>)}
+                </select>
+              </div>
+              <button type="submit" class="w-full inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-primary text-primary-foreground hover:bg-primary/90 h-10 px-4 py-2">批量生成</button>
+            </form>
+          </>
+        )}
+      </div>
+    </div>
+  </div>
+
+  <script define:vars={{ generatedCredentials }}>
+    // --- 批量绑定服务逻辑 ---
+    const batchBindServiceBtn = document.getElementById('batchBindServiceBtn')
+    const batchBindServiceModal = document.getElementById('batchBindServiceModal')
+    const closeBatchBindBtn = document.getElementById('closeBatchBindBtn')
+    const cancelBatchBindBtn = document.getElementById('cancelBatchBindBtn')
+    const batchBindBackdrop = document.getElementById('batchBindBackdrop')
+    const batchBindAddressesContainer = document.getElementById('batchBindAddressesContainer')
+    const batchBindCount = document.getElementById('batchBindCount')
+    const batchBindPreview = document.getElementById('batchBindPreview')
+
+    // 关闭批量绑定服务模态框
+    const closeBatchBindModal = () => {
+      batchBindServiceModal?.classList.add('hidden')
+      batchBindServiceModal?.classList.remove('flex')
+      document.body.style.overflow = ''
+    }
+
+    // 关闭事件监听
+    closeBatchBindBtn?.addEventListener('click', closeBatchBindModal)
+    cancelBatchBindBtn?.addEventListener('click', closeBatchBindModal)
+    batchBindBackdrop?.addEventListener('click', closeBatchBindModal)
+
+    // 打开批量绑定服务模态框
+    batchBindServiceBtn?.addEventListener('click', () => {
+      const selectedCheckboxes = document.querySelectorAll('.mailbox-checkbox:checked')
+      if (selectedCheckboxes.length === 0) return alert('请先选择邮箱')
+
+      // 1. 更新UI计数
+      if (batchBindCount) batchBindCount.textContent = selectedCheckboxes.length.toString()
+
+      // 2. 更新预览文本
+      const addresses = Array.from(selectedCheckboxes).map(cb => cb.value)
+      if (batchBindPreview) {
+        const previewStr = addresses.slice(0, 3).join(', ')
+        batchBindPreview.textContent = addresses.length > 3 ? `${previewStr} 等...` : previewStr
+      }
+
+      // 3. 注入隐藏的地址输入框
+      if (batchBindAddressesContainer) {
+        batchBindAddressesContainer.innerHTML = ''
+        addresses.forEach(addr => {
+          const input = document.createElement('input')
+          input.type = 'hidden'
+          input.name = 'addresses[]'
+          input.value = addr
+          batchBindAddressesContainer.appendChild(input)
+        })
+      }
+
+      // 显示模态框
+      batchBindServiceModal?.classList.remove('hidden')
+      batchBindServiceModal?.classList.add('flex')
+      document.body.style.overflow = 'hidden'
+    })
+
+    // 动态自定义服务行管理
+    const addCustomServiceRowBtn = document.getElementById('addCustomServiceRowBtn')
+    const customServicesContainer = document.getElementById('customServicesContainer')
+    const rowTemplate = document.getElementById('customServiceRowTemplate')
+
+    addCustomServiceRowBtn?.addEventListener('click', () => {
+      if (!customServicesContainer || !rowTemplate) return
+
+      // 克隆模板内容
+      const clone = rowTemplate.content.cloneNode(true)
+      const row = clone.querySelector('div')
+
+      // 为删除按钮添加事件处理
+      const deleteBtn = row.querySelector('.delete-row-btn')
+      deleteBtn?.addEventListener('click', () => {
+        row.remove()
+      })
+
+      customServicesContainer.appendChild(row)
+    })
+
+    // Modal 控制
+    const createMailboxBtn = document.getElementById('createMailboxBtn')
+    const createMailboxModal = document.getElementById('createMailboxModal')
+    const closeModalBtn = document.getElementById('closeModalBtn')
+    const modalBackdrop = document.getElementById('modalBackdrop')
+    const singleModeBtn = document.getElementById('singleModeBtn')
+    const batchModeBtn = document.getElementById('batchModeBtn')
+    const singleCreateForm = document.getElementById('singleCreateForm')
+    const batchCreateForm = document.getElementById('batchCreateForm')
+
+    // 打开 Modal
+    createMailboxBtn?.addEventListener('click', () => {
+      createMailboxModal?.classList.remove('hidden')
+      createMailboxModal?.classList.add('flex')
+      document.body.style.overflow = 'hidden'
+    })
+
+    // 关闭 Modal
+    const closeModal = () => {
+      createMailboxModal?.classList.add('hidden')
+      createMailboxModal?.classList.remove('flex')
+      document.body.style.overflow = ''
+    }
+
+    closeModalBtn?.addEventListener('click', closeModal)
+    modalBackdrop?.addEventListener('click', closeModal)
+
+    // ESC 键关闭 Modal
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && createMailboxModal && !createMailboxModal.classList.contains('hidden')) {
+        closeModal()
+      }
+    })
+
+    // 模式切换
+    singleModeBtn?.addEventListener('click', () => {
+      singleModeBtn?.classList.remove('border', 'border-input', 'bg-background', 'hover:bg-accent', 'hover:text-accent-foreground')
+      singleModeBtn?.classList.add('bg-primary', 'text-primary-foreground')
+      batchModeBtn?.classList.remove('bg-primary', 'text-primary-foreground')
+      batchModeBtn?.classList.add('border', 'border-input', 'bg-background', 'hover:bg-accent', 'hover:text-accent-foreground')
+      singleCreateForm?.classList.remove('hidden')
+      batchCreateForm?.classList.add('hidden')
+    })
+
+    batchModeBtn?.addEventListener('click', () => {
+      batchModeBtn?.classList.remove('border', 'border-input', 'bg-background', 'hover:bg-accent', 'hover:text-accent-foreground')
+      batchModeBtn?.classList.add('bg-primary', 'text-primary-foreground')
+      singleModeBtn?.classList.remove('bg-primary', 'text-primary-foreground')
+      singleModeBtn?.classList.add('border', 'border-input', 'bg-background', 'hover:bg-accent', 'hover:text-accent-foreground')
+      batchCreateForm?.classList.remove('hidden')
+      singleCreateForm?.classList.add('hidden')
+    })
+
+    // 下载凭证CSV
+    document.getElementById('downloadCredentialsBtn')?.addEventListener('click', () => {
+      if (generatedCredentials.length === 0) return
+
+      const header = 'address,password'
+      const rows = generatedCredentials.map(c => `"${c.address}","${c.password}"`).join('\n')
+      const csv = `${header}\n${rows}`
+
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `mailboxes-${Date.now()}.csv`
+      a.click()
+      URL.revokeObjectURL(url)
+    })
+
+    // 复制所有凭证
+    document.getElementById('copyAllCredentialsBtn')?.addEventListener('click', async () => {
+      if (generatedCredentials.length === 0) return
+
+      const text = generatedCredentials.map(c => `${c.address}\t${c.password}`).join('\n')
+      try {
+        await navigator.clipboard.writeText(text)
+        alert('已复制到剪贴板')
+      } catch (err) {
+        console.error('复制失败:', err)
+      }
+    })
+
+    // 批量选择功能
+    const selectAllCheckbox = document.getElementById('selectAll')
+    const mailboxCheckboxes = document.querySelectorAll('.mailbox-checkbox')
+    const batchDeleteBtn = document.getElementById('batchDeleteBtn')
+    const exportSelectedBtn = document.getElementById('exportSelectedBtn')
+    const selectedCountSpan = document.getElementById('selectedCount')
+    const exportCountSpan = document.getElementById('exportCount')
+    const batchDeleteForm = document.getElementById('batchDeleteForm')
+
+    function updateBatchButtons() {
+      const selectedCount = Array.from(mailboxCheckboxes).filter(cb => cb.checked).length
+      if (selectedCountSpan) selectedCountSpan.textContent = selectedCount.toString()
+      if (exportCountSpan) exportCountSpan.textContent = selectedCount.toString()
+
+      if (selectedCount > 0) {
+        batchBindServiceBtn?.classList.remove('hidden')
+        batchDeleteBtn?.classList.remove('hidden')
+        exportSelectedBtn?.classList.remove('hidden')
+      } else {
+        batchBindServiceBtn?.classList.add('hidden')
+        batchDeleteBtn?.classList.add('hidden')
+        exportSelectedBtn?.classList.add('hidden')
+      }
+    }
+
+    selectAllCheckbox?.addEventListener('change', () => {
+      mailboxCheckboxes.forEach(cb => {
+        cb.checked = selectAllCheckbox.checked
+      })
+      updateBatchButtons()
+    })
+
+    mailboxCheckboxes.forEach(cb => {
+      cb.addEventListener('change', () => {
+        const allChecked = Array.from(mailboxCheckboxes).every(c => c.checked)
+        const someChecked = Array.from(mailboxCheckboxes).some(c => c.checked)
+        if (selectAllCheckbox) {
+          selectAllCheckbox.checked = allChecked
+          selectAllCheckbox.indeterminate = someChecked && !allChecked
+        }
+        updateBatchButtons()
+      })
+    })
+
+    // 导出选中邮箱
+    exportSelectedBtn?.addEventListener('click', async () => {
+      const selectedAddresses = Array.from(mailboxCheckboxes)
+        .filter(cb => cb.checked)
+        .map(cb => cb.value)
+
+      if (selectedAddresses.length === 0) return
+
+      // 显示加载状态
+      exportSelectedBtn.disabled = true
+      const originalText = exportSelectedBtn.innerHTML
+      exportSelectedBtn.innerHTML = '<span class="inline-flex items-center gap-2"><span class="animate-spin">⏳</span> 导出中...</span>'
+
+      try {
+        // 并行获取所有邮箱的密码
+        const results = await Promise.all(
+          selectedAddresses.map(async (address) => {
+            try {
+              const formData = new FormData()
+              formData.append('action', 'view_password')
+              formData.append('address', address)
+
+              const response = await fetch(window.location.pathname, {
+                method: 'POST',
+                body: formData
+              })
+
+              if (!response.ok) {
+                console.error(`HTTP ${response.status} for ${address}`)
+                return { address, password: null, error: `HTTP ${response.status}` }
+              }
+
+              const html = await response.text()
+              // 解析返回的HTML获取密码
+              const parser = new DOMParser()
+              const doc = parser.parseFromString(html, 'text/html')
+              const passwordCell = doc.querySelector('.bg-green-50 table tbody tr td:nth-child(2)')
+              const password = passwordCell?.textContent?.trim()
+
+              return { address, password, error: password ? null : '无密码' }
+            } catch (err) {
+              console.error(`Failed to get password for ${address}:`, err)
+              return { address, password: null, error: err.message }
+            }
+          })
+        )
+
+        // 分离成功和失败的记录
+        const credentials = results.filter(r => r.password).map(r => ({ address: r.address, password: r.password }))
+        const failures = results.filter(r => !r.password)
+
+        if (credentials.length === 0) {
+          alert('未能获取任何密码，请确保选中的邮箱有设置密码')
+          return
+        }
+
+        // 生成CSV
+        const header = 'address,password'
+        const rows = credentials.map(c => `"${c.address}","${c.password}"`).join('\n')
+        const csv = `${header}\n${rows}`
+
+        // 下载CSV
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `mailboxes-export-${Date.now()}.csv`
+        a.click()
+        URL.revokeObjectURL(url)
+
+        // 显示结果
+        if (failures.length > 0) {
+          const failureDetails = failures.map(f => `- ${f.address}: ${f.error}`).join('\n')
+          alert(`导出完成！\n\n成功: ${credentials.length} 个\n失败: ${failures.length} 个\n\n失败详情:\n${failureDetails}`)
+        } else {
+          alert(`导出成功！共导出 ${credentials.length} 个邮箱`)
+        }
+      } catch (err) {
+        console.error('Export failed:', err)
+        alert(`导出失败: ${err.message}`)
+      } finally {
+        // 恢复按钮状态
+        exportSelectedBtn.disabled = false
+        exportSelectedBtn.innerHTML = originalText
+      }
+    })
+
+    // 复制快捷登录链接
+    document.querySelectorAll('.copy-link-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const mailbox = btn.getAttribute('data-mailbox')
+        if (!mailbox) return
+
+        const originalIcon = btn.innerHTML
+        btn.disabled = true
+
+        try {
+          // 调用API生成访问token
+          const response = await fetch('/admin/api/generate-access-link', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mailbox })
+          })
+
+          if (!response.ok) {
+            throw new Error('生成链接失败')
+          }
+
+          const { accessLink } = await response.json()
+
+          // 复制到剪贴板
+          await navigator.clipboard.writeText(accessLink)
+
+          // 显示成功状态
+          btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-green-600"><polyline points="20 6 9 17 4 12"></polyline></svg>'
+          btn.classList.add('text-green-600')
+
+          setTimeout(() => {
+            btn.innerHTML = originalIcon
+            btn.classList.remove('text-green-600')
+            btn.disabled = false
+          }, 2000)
+        } catch (err) {
+          console.error('Failed to copy link:', err)
+          alert('复制链接失败: ' + err.message)
+          btn.disabled = false
+        }
+      })
+    })
+
+    batchDeleteBtn?.addEventListener('click', () => {
+      const selectedCount = Array.from(mailboxCheckboxes).filter(cb => cb.checked).length
+      if (confirm(`确定要删除选中的 ${selectedCount} 个邮箱吗？邮箱将移至回收站，可在回收站中恢复。`)) {
+        batchDeleteForm.submit()
+      }
+    })
+  </script>
+</AdminLayout>

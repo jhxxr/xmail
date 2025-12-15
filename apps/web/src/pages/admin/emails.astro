@@ -1,0 +1,270 @@
+---
+import AdminLayout from "../../layouts/AdminLayout.astro"
+import { createDB, getAdminById, listAllEmails, getEmailsByMailbox, getEmail, deleteEmail, markEmailAsRead, listMailboxes, toggleEmailStar } from "database"
+import { verifyToken } from "../../lib/auth"
+import { formatDate, extractPreview, extractVerificationCode } from "../../lib/utils"
+import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
+import { Button } from "../../components/ui/button"
+import { Badge } from "../../components/ui/badge"
+import { ArrowLeft, Trash2, Mail, User, Clock, ArrowRight, Copy, Star } from "lucide-react"
+
+const db = createDB(Astro.locals.runtime.env.DB)
+const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
+
+// 验证登录
+const token = Astro.cookies.get("admin_token")?.value
+if (!token) return Astro.redirect("/admin/login")
+const payload = await verifyToken(token, jwtSecret)
+if (!payload || payload.type !== "admin") return Astro.redirect("/admin/login")
+const admin = await getAdminById(db, payload.id)
+if (!admin) return Astro.redirect("/admin/login")
+
+let message = ""
+
+// 处理删除和收藏
+if (Astro.request.method === "POST") {
+  const formData = await Astro.request.formData()
+  const action = formData.get("action")?.toString()
+  if (action === "delete") {
+    const id = formData.get("id")?.toString()
+    if (id) {
+      await deleteEmail(db, id)
+      message = "邮件已删除"
+    }
+  } else if (action === "toggle_star") {
+    const emailId = formData.get("id")?.toString()
+    if (emailId) {
+      const email = await getEmail(db, emailId)
+      if (email) {
+        await toggleEmailStar(db, emailId, !email.isStarred)
+      }
+    }
+  }
+}
+
+const mailboxFilter = Astro.url.searchParams.get("mailbox")
+const emailId = Astro.url.searchParams.get("view")
+
+// 获取所有邮箱列表用于选择器
+const allMailboxes = await listMailboxes(db, { limit: 1000 })
+
+// 获取邮件列表或详情
+let emails: Awaited<ReturnType<typeof listAllEmails>> = []
+let selectedEmail: Awaited<ReturnType<typeof getEmail>> = null
+
+if (emailId) {
+  selectedEmail = await getEmail(db, emailId)
+  if (selectedEmail && !selectedEmail.isRead) {
+    await markEmailAsRead(db, emailId)
+  }
+} else if (mailboxFilter) {
+  emails = await getEmailsByMailbox(db, mailboxFilter, { limit: 100 })
+} else {
+  emails = await listAllEmails(db, { limit: 100 })
+}
+
+// 安全处理 HTML
+function sanitizeHtml(html: string): string {
+  return html
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
+    .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, "")
+    .replace(/\s+on\w+\s*=\s*["'][^"']*["']/gi, "")
+    .replace(/href\s*=\s*["']javascript:[^"']*["']/gi, 'href="#"')
+}
+---
+
+<AdminLayout title="邮件管理">
+  <div class="space-y-6">
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+      <h1 class="text-3xl font-bold tracking-tight flex items-center gap-2">
+        邮件管理
+        {mailboxFilter && <Badge variant="outline" className="text-lg font-normal">{mailboxFilter}</Badge>}
+      </h1>
+      <div class="flex flex-wrap gap-2 items-center w-full sm:w-auto">
+        {!emailId && (
+          <div class="flex items-center gap-2 flex-1 sm:flex-initial">
+            <select
+              onchange="location.href='/admin/emails' + (this.value ? '?mailbox=' + encodeURIComponent(this.value) : '')"
+              class="px-3 py-2 border rounded-md bg-background text-sm min-w-[200px]"
+            >
+              <option value="" selected={!mailboxFilter}>全部邮箱</option>
+              {allMailboxes.map((mb) => (
+                <option value={mb.address} selected={mailboxFilter === mb.address}>{mb.address}</option>
+              ))}
+            </select>
+          </div>
+        )}
+        {(mailboxFilter || emailId) && (
+          <a href="/admin/emails">
+            <Button variant="secondary" size="sm">返回全部</Button>
+          </a>
+        )}
+      </div>
+    </div>
+
+    {message && (
+      <div class="p-4 rounded-md border bg-green-50 text-green-900 border-green-200">
+        {message}
+      </div>
+    )}
+
+    {selectedEmail ? (
+      <!-- 邮件详情 -->
+      <Card>
+        <CardHeader className="border-b bg-muted/40">
+          <div class="flex flex-col gap-4">
+            <div class="space-y-1">
+              <CardTitle className="text-xl">{selectedEmail.subject || "(无主题)"}</CardTitle>
+              <div class="flex flex-col gap-1 text-sm text-muted-foreground mt-2">
+                <div class="flex items-center gap-2">
+                  <User className="h-4 w-4" />
+                  <span class="font-medium text-foreground">发件人:</span>
+                  <span class="truncate">{selectedEmail.fromName} &lt;{selectedEmail.fromAddress}&gt;</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <Mail className="h-4 w-4" />
+                  <span class="font-medium text-foreground">收件人:</span>
+                  <span class="truncate">{selectedEmail.messageTo}</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <Clock className="h-4 w-4" />
+                  <span class="font-medium text-foreground">时间:</span>
+                  <span>{selectedEmail.date || formatDate(selectedEmail.createdAt)}</span>
+                </div>
+              </div>
+            </div>
+            <div class="flex flex-col sm:flex-row gap-2">
+              <a href={`/admin/emails${mailboxFilter ? `?mailbox=${encodeURIComponent(mailboxFilter)}` : ""}`} class="flex-1 sm:flex-none">
+                <Button variant="outline" size="sm" className="w-full sm:w-auto">
+                  <ArrowLeft className="h-4 w-4 mr-2" />
+                  返回列表
+                </Button>
+              </a>
+              <form method="POST" class="flex-1 sm:flex-none">
+                <input type="hidden" name="action" value="delete" />
+                <input type="hidden" name="id" value={selectedEmail.id} />
+                <Button type="submit" variant="destructive" size="sm" className="w-full sm:w-auto" onclick="return confirm('确定删除？')">
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  删除邮件
+                </Button>
+              </form>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="p-6 min-h-[400px]">
+          {selectedEmail.html ? (
+            <div class="prose prose-sm max-w-none dark:prose-invert" set:html={sanitizeHtml(selectedEmail.html)} />
+          ) : selectedEmail.text ? (
+            <pre class="whitespace-pre-wrap font-sans text-sm">{selectedEmail.text}</pre>
+          ) : (
+            <p class="text-muted-foreground italic">(无内容)</p>
+          )}
+        </CardContent>
+      </Card>
+    ) : (
+      <!-- 邮件列表 -->
+      <Card>
+        <div class="relative w-full overflow-auto">
+          {emails.length === 0 ? (
+            <div class="p-8 text-center text-muted-foreground">暂无邮件</div>
+          ) : (
+            <div class="divide-y">
+              {emails.map((email) => {
+                const verificationCode = extractVerificationCode(email.text, email.html)
+                return (
+                  <div class={`relative group ${!email.isRead ? "bg-blue-50/50 dark:bg-blue-900/10" : ""}`}>
+                    <a
+                      href={`/admin/emails?view=${email.id}${mailboxFilter ? `&mailbox=${encodeURIComponent(mailboxFilter)}` : ""}`}
+                      class="absolute inset-0 z-0"
+                    ></a>
+
+                    <div class="relative z-10 flex justify-between items-start gap-4 p-4 pointer-events-none">
+                      <div class="flex-1 min-w-0 space-y-1">
+                        <div class="flex items-center gap-2 text-sm">
+                          <form method="POST" class="pointer-events-auto relative z-20 mr-1">
+                            <input type="hidden" name="action" value="toggle_star" />
+                            <input type="hidden" name="id" value={email.id} />
+                            <button
+                              type="submit"
+                              title={email.isStarred ? "取消收藏" : "收藏邮件（防止自动删除）"}
+                              aria-label={email.isStarred ? "取消收藏此邮件" : "收藏此邮件以防止自动删除"}
+                              class="flex items-center justify-center p-0.5 rounded hover:bg-muted transition-colors group/star"
+                            >
+                              <Star className={`h-4 w-4 ${
+                                email.isStarred
+                                  ? "fill-yellow-400 text-yellow-400"
+                                  : "text-muted-foreground/30 group-hover/star:text-yellow-400"
+                              }`} />
+                            </button>
+                          </form>
+                          {!email.isRead && <span class="w-2 h-2 bg-primary rounded-full flex-shrink-0" />}
+                          <span class="font-medium truncate">{email.fromName || email.fromAddress}</span>
+                          <ArrowRight className="h-3 w-3 text-muted-foreground" />
+                          <span class="text-muted-foreground truncate">{email.mailboxAddress}</span>
+                        </div>
+                        <div class="font-medium truncate">{email.subject || "(无主题)"}</div>
+                        <div class="flex items-center gap-2">
+                          <div class="text-sm text-muted-foreground truncate flex-1">{extractPreview(email.text, email.html)}</div>
+                          {verificationCode && (
+                            <button
+                              type="button"
+                              class="copy-code-btn pointer-events-auto relative z-20 flex items-center gap-1.5 px-2.5 py-1 bg-primary/10 hover:bg-primary/20 text-primary rounded-md text-xs font-mono font-semibold transition-colors border border-primary/30 flex-shrink-0"
+                              data-code={verificationCode}
+                              title="点击复制验证码"
+                            >
+                              <span>{verificationCode}</span>
+                              <Copy className="h-3 w-3" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <div class="text-xs text-muted-foreground whitespace-nowrap">{formatDate(email.createdAt)}</div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      </Card>
+    )}
+  </div>
+</AdminLayout>
+
+<script>
+  // 复制验证码功能
+  document.addEventListener('click', async (e) => {
+    const target = e.target as HTMLElement
+    const btn = target.closest('.copy-code-btn') as HTMLButtonElement
+    if (btn) {
+      e.preventDefault()
+      e.stopPropagation()
+      const code = btn.getAttribute('data-code')
+      if (code) {
+        try {
+          await navigator.clipboard.writeText(code)
+          // 视觉反馈
+          const originalBg = btn.className
+          btn.classList.remove('bg-primary/10', 'hover:bg-primary/20')
+          btn.classList.add('bg-green-600', 'text-white', 'border-green-600')
+          const span = btn.querySelector('span')
+          if (span) {
+            const originalText = span.textContent
+            span.textContent = '已复制'
+            setTimeout(() => {
+              btn.className = originalBg
+              span.textContent = originalText
+            }, 1500)
+          }
+        } catch (err) {
+          console.error('复制失败:', err)
+        }
+      }
+    }
+  })
+</script>
+
+<style is:global>
+  .prose img { max-width: 100%; height: auto; }
+  .prose a { color: hsl(var(--primary)); text-decoration: underline; }
+</style>

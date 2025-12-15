@@ -1,0 +1,101 @@
+---
+import { MailboxInfo } from "./MailboxInfo"
+import { ServiceList } from "./ServiceList"
+import { LogOut, Trash2, Inbox as InboxIcon, Star, Mail, ChevronLeft } from "lucide-react"
+import { Button } from "../ui/button"
+
+interface Props {
+  mailboxes: any[]
+  selectedMailbox: string
+  stats: any
+  services: any[]
+  hasUserId?: boolean
+}
+
+const { mailboxes, selectedMailbox, stats, services, hasUserId = false } = Astro.props
+const currentFilter = Astro.url.searchParams.get("filter")
+const mailboxParam = Astro.url.searchParams.get("mailbox")
+---
+
+<aside class="w-80 flex-shrink-0 border-r bg-muted/10 min-h-screen flex flex-col">
+  <!-- App Title -->
+  <div class="px-6 pt-6 pb-2">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-2 text-primary">
+        <Mail className="h-6 w-6" />
+        <h1 class="text-xl font-bold tracking-tight">XMail</h1>
+      </div>
+      {hasUserId && (
+        <a href="/mailboxes" class="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors">
+          <ChevronLeft className="h-4 w-4" />
+          <span>返回</span>
+        </a>
+      )}
+    </div>
+  </div>
+
+  <div class="p-6 space-y-6 flex-1 overflow-y-auto">
+    <!-- 邮箱信息卡片 -->
+    <MailboxInfo client:load address={selectedMailbox} stats={stats} mailboxes={mailboxes} />
+
+    <!-- 邮件筛选 -->
+    <div class="space-y-1">
+      <a
+        href={`/?mailbox=${encodeURIComponent(selectedMailbox)}`}
+        class={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+          !currentFilter
+            ? "bg-primary/10 text-primary"
+            : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+        }`}
+      >
+        <InboxIcon className="h-4 w-4" />
+        全部邮件
+      </a>
+      <a
+        href={`/?mailbox=${encodeURIComponent(selectedMailbox)}&filter=starred`}
+        class={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+          currentFilter === "starred"
+            ? "bg-primary/10 text-primary"
+            : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+        }`}
+      >
+        <Star className="h-4 w-4" />
+        已收藏
+      </a>
+    </div>
+
+    <!-- 关联服务 -->
+    {services.length > 0 && (
+      <div class="pt-2">
+        <ServiceList client:visible services={services} />
+      </div>
+    )}
+  </div>
+
+  <!-- 底部操作按钮 -->
+  <div class="p-4 border-t bg-background/50 space-y-2">
+    <form
+      method="POST"
+      onsubmit="return confirm('确定要删除此邮箱吗？\n\n注意：\n• 邮箱将被移至回收站\n• 只有管理员可以恢复\n• 如果管理员清空回收站，邮箱将永久删除')"
+      class="w-full"
+    >
+      <input type="hidden" name="action" value="delete_mailbox" />
+      <input type="hidden" name="address" value={selectedMailbox} />
+      <Button
+        variant="ghost"
+        className="w-full justify-start text-muted-foreground hover:text-destructive"
+        type="submit"
+      >
+        <Trash2 className="mr-2 h-4 w-4" />
+        删除邮箱
+      </Button>
+    </form>
+
+    <a href="/logout" class="block">
+      <Button variant="ghost" className="w-full justify-start text-muted-foreground">
+        <LogOut className="mr-2 h-4 w-4" />
+        退出登录
+      </Button>
+    </a>
+  </div>
+</aside>

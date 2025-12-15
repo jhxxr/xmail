@@ -1,0 +1,265 @@
+---
+import Layout from "../../layouts/Layout.astro"
+import { createDB, getExternalAccount, getExternalProvider, getEmailsByMailbox, getMailboxStats, getUserExternalAccounts, getExternalAccountServicesWithDetails } from "database"
+import { verifyToken } from "../../lib/auth"
+import { decryptPassword, formatDate, extractPreview, extractVerificationCode } from "../../lib/utils"
+import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
+import { Button } from "../../components/ui/button"
+import { Badge } from "../../components/ui/badge"
+import { Mail, ExternalLink, Copy, Eye, EyeOff, ChevronRight, ArrowLeft, Globe } from "lucide-react"
+
+const db = createDB(Astro.locals.runtime.env.DB)
+const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
+const encryptionKey = Astro.locals.runtime.env.ENCRYPTION_KEY || "default-key-please-change"
+
+let userId: string | null = null
+const token = Astro.cookies.get("user_token")?.value
+if (token) {
+  const payload = await verifyToken(token, jwtSecret)
+  if (payload?.type === "user" && payload.id) {
+    userId = payload.id
+  }
+}
+
+if (!userId) {
+  return Astro.redirect("/")
+}
+
+const accountId = Astro.params.id
+if (!accountId) {
+  return Astro.redirect("/mailboxes")
+}
+
+// 获取账号信息
+const account = await getExternalAccount(db, accountId)
+if (!account) {
+  return Astro.redirect("/mailboxes")
+}
+
+// 验证用户是否有权限访问此账号
+const userAccounts = await getUserExternalAccounts(db, userId)
+if (!userAccounts.find(a => a.id === accountId)) {
+  return Astro.redirect("/mailboxes")
+}
+
+// 获取提供商信息
+const provider = await getExternalProvider(db, account.providerId)
+if (!provider) {
+  return Astro.redirect("/mailboxes")
+}
+
+// 解密密码
+const decryptedPassword = decryptPassword(account.encryptedPassword, encryptionKey)
+
+// 获取绑定的服务
+const services = await getExternalAccountServicesWithDetails(db, accountId)
+
+// 如果有辅助邮箱，获取邮件
+let auxiliaryEmails: Awaited<ReturnType<typeof getEmailsByMailbox>> = []
+let auxiliaryStats = { total: 0, unread: 0 }
+if (account.linkedMailboxAddress) {
+  [auxiliaryEmails, auxiliaryStats] = await Promise.all([
+    getEmailsByMailbox(db, account.linkedMailboxAddress, { limit: 10 }),
+    getMailboxStats(db, account.linkedMailboxAddress),
+  ])
+}
+---
+
+<Layout title={`${provider.name} - ${account.email}`}>
+  <div class="min-h-screen bg-muted/30">
+    <!-- 顶部导航栏 -->
+    <header class="bg-background border-b sticky top-0 z-10">
+      <div class="container max-w-4xl mx-auto px-4 h-16 flex items-center gap-4">
+        <button
+          onclick="history.back()"
+          class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent h-9 w-9 cursor-pointer bg-transparent border-0"
+        >
+          <ArrowLeft className="h-5 w-5" />
+        </button>
+        <div class="flex-1">
+          <h1 class="font-bold text-lg">{provider.name}</h1>
+          <p class="text-sm text-muted-foreground">{account.email}</p>
+        </div>
+      </div>
+    </header>
+
+    <main class="container max-w-4xl mx-auto px-4 py-8 space-y-6">
+      <!-- 账号凭证卡片 -->
+      <Card>
+        <CardHeader>
+          <CardTitle>账号凭证</CardTitle>
+        </CardHeader>
+        <CardContent class="space-y-4">
+          <!-- 登录地址 -->
+          <div>
+            <label class="text-sm font-medium text-muted-foreground">登录地址</label>
+            <div class="flex items-center gap-2 mt-1">
+              <a
+                href={provider.loginUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-primary text-primary-foreground hover:bg-primary/90 h-10 px-4"
+              >
+                <ExternalLink className="h-4 w-4 mr-2" />
+                打开登录页面
+              </a>
+              <span class="text-sm text-muted-foreground truncate">{provider.loginUrl}</span>
+            </div>
+          </div>
+
+          <!-- 邮箱地址 -->
+          <div>
+            <label class="text-sm font-medium text-muted-foreground">邮箱地址</label>
+            <div class="flex items-center gap-2 mt-1">
+              <code class="flex-1 px-3 py-2 bg-muted rounded-md font-mono text-sm">{account.email}</code>
+              <button
+                type="button"
+                class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors border border-input bg-background hover:bg-accent h-10 w-10"
+                onclick={`navigator.clipboard.writeText('${account.email}').then(() => { this.innerHTML = '<svg class="h-4 w-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>'; setTimeout(() => { this.innerHTML = '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>'; }, 1500); })`}
+                title="复制邮箱"
+              >
+                <Copy className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+
+          <!-- 密码 -->
+          <div>
+            <label class="text-sm font-medium text-muted-foreground">密码</label>
+            <div class="flex items-center gap-2 mt-1">
+              <code id="password-field" class="flex-1 px-3 py-2 bg-muted rounded-md font-mono text-sm">••••••••</code>
+              <button
+                type="button"
+                id="toggle-password"
+                class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors border border-input bg-background hover:bg-accent h-10 w-10"
+                onclick={`const field = document.getElementById('password-field'); const icon = this.querySelector('svg'); if (field.textContent === '••••••••') { field.textContent = '${decryptedPassword}'; icon.outerHTML = '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"></path></svg>'; } else { field.textContent = '••••••••'; icon.outerHTML = '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>'; }`}
+                title="显示/隐藏密码"
+              >
+                <Eye className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors border border-input bg-background hover:bg-accent h-10 w-10"
+                onclick={`navigator.clipboard.writeText('${decryptedPassword}').then(() => { this.innerHTML = '<svg class="h-4 w-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>'; setTimeout(() => { this.innerHTML = '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>'; }, 1500); })`}
+                title="复制密码"
+              >
+                <Copy className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+
+          {account.note && (
+            <div>
+              <label class="text-sm font-medium text-muted-foreground">备注</label>
+              <p class="text-sm mt-1">{account.note}</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <!-- 绑定的服务 -->
+      <Card>
+        <CardHeader>
+          <CardTitle>绑定的服务</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {services.length > 0 ? (
+            <div class="grid gap-4 sm:grid-cols-2">
+              {services.map((service) => (
+                <a
+                  href={service.loginUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors group"
+                >
+                  <div class="flex-1 min-w-0 mr-3">
+                    <div class="font-medium truncate">{service.name}</div>
+                    {service.note && <div class="text-xs text-muted-foreground truncate mt-1">{service.note}</div>}
+                  </div>
+                  <ExternalLink className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors flex-shrink-0" />
+                </a>
+              ))}
+            </div>
+          ) : (
+            <div class="text-center py-6 text-muted-foreground">
+              <Globe className="h-10 w-10 mx-auto mb-2 opacity-20" />
+              <p>暂无绑定服务</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <!-- 辅助邮箱 -->
+      {account.linkedMailboxAddress ? (
+        <Card>
+          <CardHeader>
+            <div class="flex items-center justify-between">
+              <div>
+                <CardTitle>辅助邮箱</CardTitle>
+                <p class="text-sm text-muted-foreground mt-1">
+                  用于接收验证码：{account.linkedMailboxAddress}
+                </p>
+              </div>
+              <Badge variant="secondary">
+                {auxiliaryStats.total} 封邮件
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {auxiliaryEmails.length > 0 ? (
+              <div class="space-y-2">
+                {auxiliaryEmails.map((email) => {
+                  const verificationCode = extractVerificationCode(email.text, email.html)
+                  return (
+                    <div class="relative border rounded-md p-3 hover:bg-muted/50 transition-colors group">
+                      <a href={`/mail/${email.id}`} class="absolute inset-0 z-0" aria-label="查看邮件详情"></a>
+                      <div class="flex items-start justify-between gap-2 relative z-10 pointer-events-none">
+                        <div class="flex-1 min-w-0">
+                          <div class="flex items-center gap-2 mb-1">
+                            <span class="text-sm font-medium truncate">{email.fromName || email.fromAddress}</span>
+                            <span class="text-xs text-muted-foreground">{formatDate(email.createdAt)}</span>
+                          </div>
+                          <div class="text-sm truncate mb-1">{email.subject || "(无主题)"}</div>
+                          <div class="text-xs text-muted-foreground truncate">{extractPreview(email.text, email.html)}</div>
+                          {verificationCode && (
+                            <div class="mt-2 pointer-events-auto">
+                              <button
+                                type="button"
+                                class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-primary/10 hover:bg-primary/20 text-primary rounded-md text-xs font-mono font-semibold transition-colors border border-primary/30"
+                                onclick={`event.stopPropagation(); navigator.clipboard.writeText('${verificationCode}').then(() => { const original = this.innerHTML; this.innerHTML = '<span>已复制</span>'; this.classList.add('bg-green-600', 'text-white', 'border-green-600'); setTimeout(() => { this.innerHTML = original; this.classList.remove('bg-green-600', 'text-white', 'border-green-600'); }, 1500); })`}
+                                title="点击复制验证码"
+                              >
+                                <span>{verificationCode}</span>
+                                <Copy className="h-3 w-3" />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        <ChevronRight className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none flex-shrink-0" />
+                      </div>
+                    </div>
+                  )
+                })}
+                <a
+                  href={`/?mailbox=${account.linkedMailboxAddress}`}
+                  class="block text-center text-sm text-primary hover:underline py-2"
+                >
+                  查看全部邮件 →
+                </a>
+              </div>
+            ) : (
+              <p class="text-sm text-muted-foreground text-center py-4">暂无邮件</p>
+            )}
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardContent class="flex flex-col items-center justify-center py-8">
+            <Mail className="h-12 w-12 text-muted-foreground mb-2" />
+            <p class="text-muted-foreground">暂无设置辅助邮箱</p>
+          </CardContent>
+        </Card>
+      )}
+    </main>
+  </div>
+</Layout>

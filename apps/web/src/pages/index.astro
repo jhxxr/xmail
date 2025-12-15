@@ -1,0 +1,509 @@
+---
+import Layout from "../layouts/Layout.astro"
+import { createDB, getUserByToken, getMailbox, listMailboxes, verifyMailboxPassword, updateMailboxLastLogin, updateUserLastLogin, getEmailsByMailbox, getMailboxStats, getMailboxServicesWithDetails, deleteMailbox, toggleEmailStar, getEmail, listStarredEmails, checkUserHasAccessToMailbox } from "database"
+import { verifyToken, generateUserToken } from "../lib/auth"
+import { formatDate, extractPreview, extractVerificationCode } from "../lib/utils"
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card"
+import { Button } from "../components/ui/button"
+import { Input } from "../components/ui/input"
+import { Badge } from "../components/ui/badge"
+import { Mail, Lock, Key, LogOut, Inbox, RefreshCw, ChevronRight, Copy, Star } from "lucide-react"
+import DesktopSidebar from "../components/inbox/DesktopSidebar.astro"
+import MobileHeader from "../components/inbox/MobileHeader.astro"
+
+const db = createDB(Astro.locals.runtime.env.DB)
+const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
+
+let userId: string | null = null
+let mailboxes: Awaited<ReturnType<typeof listMailboxes>> = []
+let selectedMailbox: string | null = null
+let emails: Awaited<ReturnType<typeof getEmailsByMailbox>> = []
+let stats = { total: 0, unread: 0 }
+let error = ""
+let message = ""
+
+// 1. 检查 URL 参数中的 access_token (快捷访问令牌)
+const accessToken = Astro.url.searchParams.get("access_token")
+if (accessToken) {
+  const payload = await verifyToken(accessToken, jwtSecret)
+  if (payload?.type === "user" && payload.mailbox) {
+    // 设置cookie并重定向
+    Astro.cookies.set("user_token", accessToken, {
+      httpOnly: true,
+      secure: import.meta.env.PROD,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 7, // 7天
+    })
+    // 直接重定向到该邮箱
+    return Astro.redirect(`/?mailbox=${encodeURIComponent(payload.mailbox)}`)
+  } else {
+    error = "无效的访问链接或链接已过期"
+  }
+}
+
+// 2. 检查 URL 参数中的 key (用户 token)
+const urlKey = Astro.url.searchParams.get("key")
+if (urlKey) {
+  const user = await getUserByToken(db, urlKey)
+  if (user) {
+    userId = user.id
+    await updateUserLastLogin(db, user.id)
+    const token = await generateUserToken(user.id, "", jwtSecret)
+    Astro.cookies.set("user_token", token, {
+      httpOnly: true,
+      secure: import.meta.env.PROD,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 30,
+    })
+    return Astro.redirect("/mailboxes")
+  } else {
+    error = "无效的访问链接"
+  }
+}
+
+// 3. 检查 cookie 中的 token
+const token = Astro.cookies.get("user_token")?.value
+let isTokenLogin = false
+if (!userId && token) {
+  const payload = await verifyToken(token, jwtSecret)
+  if (payload?.type === "user" && payload.id) {
+    // 检查是否是快捷访问token (id为"quick_access")
+    if (payload.id === "quick_access" && payload.mailbox) {
+      // 快捷访问：直接设置选中的邮箱
+      selectedMailbox = payload.mailbox
+    } else {
+      // 普通用户token
+      userId = payload.id
+      isTokenLogin = true
+    }
+  } else if (payload?.type === "password" && payload.address) {
+    // 密码登录，直接设置选中的邮箱
+    selectedMailbox = payload.address
+  }
+}
+
+// 4. 处理表单登录和操作
+let loginType = "password" // 默认登录方式
+if (Astro.request.method === "POST") {
+  const formData = await Astro.request.formData()
+  const action = formData.get("action")?.toString()
+
+  if (action === "delete_mailbox" && userId) {
+    // 用户删除自己的邮箱
+    const address = formData.get("address")?.toString()
+    if (address) {
+      const mailbox = await getMailbox(db, address)
+      const hasAccess = mailbox && await checkUserHasAccessToMailbox(db, userId, address)
+      if (hasAccess) {
+        await deleteMailbox(db, address, "user")
+        message = `邮箱 ${address} 已删除。如需恢复，请联系管理员。`
+        // 重新加载邮箱列表
+        mailboxes = await listMailboxes(db, { userId, limit: 100 })
+        if (selectedMailbox === address) {
+          selectedMailbox = mailboxes[0]?.address || null
+        }
+      } else {
+        error = "无权删除此邮箱"
+      }
+    }
+  } else if (action === "toggle_star") {
+    // 用户收藏/取消收藏邮件（支持 token 登录和密码登录）
+    const emailId = formData.get("id")?.toString()
+    if (emailId) {
+      const email = await getEmail(db, emailId)
+      if (email) {
+        const mailbox = await getMailbox(db, email.mailboxAddress)
+        // Token 登录：检查邮箱是否属于该用户（支持普通邮箱和共享邮箱）
+        // 密码登录：检查邮箱是否为当前选中的邮箱
+        const hasPermission = (userId && mailbox && await checkUserHasAccessToMailbox(db, userId, email.mailboxAddress)) ||
+                              (selectedMailbox && email.mailboxAddress === selectedMailbox)
+        if (hasPermission) {
+          await toggleEmailStar(db, emailId, !email.isStarred)
+        }
+      }
+    }
+  } else if (!userId && action === "token_login") {
+    // Token 登录
+    loginType = "token"
+    const userToken = formData.get("token")?.toString()?.trim()
+    if (userToken) {
+      const user = await getUserByToken(db, userToken)
+      if (user) {
+        userId = user.id
+        await updateUserLastLogin(db, user.id)
+        const token = await generateUserToken(user.id, "", jwtSecret)
+        Astro.cookies.set("user_token", token, {
+          httpOnly: true,
+          secure: import.meta.env.PROD,
+          sameSite: "lax",
+          path: "/",
+          maxAge: 60 * 60 * 24 * 30,
+        })
+        return Astro.redirect("/mailboxes")
+      } else {
+        error = "无效的 Token"
+      }
+    }
+  } else if (!userId) {
+    // 密码登录
+    const address = formData.get("address")?.toString()?.toLowerCase()?.trim()
+    const password = formData.get("password")?.toString()
+
+    if (address && password) {
+      const mailbox = await getMailbox(db, address)
+      if (!mailbox) {
+        error = "邮箱不存在"
+      } else if (!mailbox.isActive) {
+        error = "邮箱已被禁用"
+      } else if (!mailbox.password) {
+        error = "此邮箱未设置密码"
+      } else {
+        const valid = await verifyMailboxPassword(db, address, password)
+        if (valid) {
+          await updateMailboxLastLogin(db, address)
+          const token = await generateUserToken("password", address, jwtSecret)
+          Astro.cookies.set("user_token", token, {
+            httpOnly: true,
+            secure: import.meta.env.PROD,
+            sameSite: "lax",
+            path: "/",
+            maxAge: 60 * 60 * 24 * 7,
+          })
+          selectedMailbox = address
+        } else {
+          error = "密码错误"
+        }
+      }
+    }
+  }
+}
+
+// 获取用户的邮箱列表
+if (userId) {
+  // 如果是 Token 登录且没有指定邮箱参数，重定向到邮箱列表页
+  if (isTokenLogin && !Astro.url.searchParams.get("mailbox")) {
+    return Astro.redirect("/mailboxes")
+  }
+
+  mailboxes = await listMailboxes(db, { userId, limit: 100 })
+  selectedMailbox = Astro.url.searchParams.get("mailbox") || mailboxes[0]?.address || null
+}
+
+// 获取选中邮箱的邮件和服务
+let services: Awaited<ReturnType<typeof getMailboxServicesWithDetails>> = []
+const showStarred = Astro.url.searchParams.get("filter") === "starred"
+if (selectedMailbox) {
+  [emails, stats, services] = await Promise.all([
+    showStarred
+      ? listStarredEmails(db, selectedMailbox)
+      : getEmailsByMailbox(db, selectedMailbox, { limit: 50 }),
+    getMailboxStats(db, selectedMailbox),
+    getMailboxServicesWithDetails(db, selectedMailbox),
+  ])
+}
+---
+
+<Layout title={selectedMailbox ? "收件箱" : "登录"}>
+  {!userId && !selectedMailbox ? (
+    <!-- 登录页面 -->
+    <div class="min-h-screen flex items-center justify-center bg-muted/50 p-4">
+      <Card class="w-full max-w-md">
+        <CardHeader className="space-y-1 text-center">
+          <div class="flex justify-center mb-4">
+            <div class="w-12 h-12 bg-primary rounded-xl flex items-center justify-center text-primary-foreground">
+              <Mail className="w-6 h-6" />
+            </div>
+          </div>
+          <CardTitle className="text-2xl">XMail</CardTitle>
+          <CardDescription>请选择登录方式</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {error && (
+            <div class="bg-destructive/15 text-destructive text-sm p-3 rounded-md mb-4 flex items-center gap-2">
+              <span class="font-bold">!</span> {error}
+            </div>
+          )}
+
+          <div class="tabs mb-6">
+            <div class="grid grid-cols-2 gap-2 p-1 bg-muted rounded-lg">
+              <button type="button" id="tab-token" class="px-3 py-2 text-sm font-medium rounded-md bg-background shadow-sm transition-all">Token 登录</button>
+              <button type="button" id="tab-password" class="px-3 py-2 text-sm font-medium rounded-md text-muted-foreground hover:bg-background/50 transition-all">邮箱密码登录</button>
+            </div>
+          </div>
+
+          <!-- Token 登录表单 -->
+          <form method="POST" id="form-token" class="space-y-4">
+            <input type="hidden" name="action" value="token_login" />
+            <div class="space-y-2">
+              <label class="text-sm font-medium leading-none" for="token">访问 Token</label>
+              <div class="relative">
+                <Key className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input type="text" id="token" name="token" required className="pl-9 font-mono text-sm" placeholder="xmail_xxxxxx..." />
+              </div>
+            </div>
+            <Button type="submit" className="w-full">登录</Button>
+            <p class="text-xs text-muted-foreground text-center">使用管理员分配的 Token 登录</p>
+          </form>
+
+          <!-- 邮箱密码登录表单 -->
+          <form method="POST" id="form-password" class="space-y-4 hidden">
+            <div class="space-y-2">
+              <label class="text-sm font-medium leading-none" for="address">邮箱地址</label>
+              <div class="relative">
+                <Mail className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input type="email" id="address" name="address" required className="pl-9" placeholder="you@example.com" />
+              </div>
+            </div>
+            <div class="space-y-2">
+              <label class="text-sm font-medium leading-none" for="password">密码</label>
+              <div class="relative">
+                <Lock className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input type="password" id="password" name="password" required className="pl-9" />
+              </div>
+            </div>
+            <Button type="submit" className="w-full">登录</Button>
+            <p class="text-xs text-muted-foreground text-center">使用单个邮箱的密码登录</p>
+          </form>
+        </CardContent>
+      </Card>
+
+      <script>
+        const tabToken = document.getElementById('tab-token')
+        const tabPassword = document.getElementById('tab-password')
+        const formToken = document.getElementById('form-token')
+        const formPassword = document.getElementById('form-password')
+
+        tabToken?.addEventListener('click', () => {
+          tabToken.classList.add('bg-background', 'shadow-sm', 'text-foreground')
+          tabToken.classList.remove('text-muted-foreground', 'hover:bg-background/50')
+          
+          tabPassword?.classList.remove('bg-background', 'shadow-sm', 'text-foreground')
+          tabPassword?.classList.add('text-muted-foreground', 'hover:bg-background/50')
+          
+          formToken?.classList.remove('hidden')
+          formPassword?.classList.add('hidden')
+        })
+
+        tabPassword?.addEventListener('click', () => {
+          tabPassword.classList.add('bg-background', 'shadow-sm', 'text-foreground')
+          tabPassword.classList.remove('text-muted-foreground', 'hover:bg-background/50')
+          
+          tabToken?.classList.remove('bg-background', 'shadow-sm', 'text-foreground')
+          tabToken?.classList.add('text-muted-foreground', 'hover:bg-background/50')
+          
+          formPassword?.classList.remove('hidden')
+          formToken?.classList.add('hidden')
+        })
+      </script>
+    </div>
+  ) : (
+    <!-- 收件箱页面 - 新响应式布局 -->
+    <div class="flex min-h-screen flex-col">
+      <!-- 移动端布局 -->
+      <div class="lg:hidden flex flex-col flex-1">
+        <MobileHeader
+          mailboxes={mailboxes}
+          selectedMailbox={selectedMailbox || ""}
+          stats={stats}
+          services={services}
+          hasUserId={!!userId}
+        />
+
+        <!-- 移动端邮件列表 -->
+        <main class="flex-1 bg-muted/30">
+          <div class="container max-w-4xl mx-auto px-4 py-6">
+            {message && (
+              <div class="mb-6 p-4 rounded-md border bg-green-50 text-green-900 border-green-200">
+                {message}
+              </div>
+            )}
+
+            {emails.length === 0 ? (
+              <Card className="flex flex-col items-center justify-center py-16 text-center">
+                <div class="w-16 h-16 bg-muted rounded-full flex items-center justify-center mb-4">
+                  <Inbox className="w-8 h-8 text-muted-foreground" />
+                </div>
+                <h3 class="text-lg font-medium">暂无邮件</h3>
+                <p class="text-muted-foreground mt-2 max-w-sm">
+                  您的收件箱是空的。发送邮件到 <span class="font-mono text-foreground bg-muted px-1 rounded">{selectedMailbox}</span> 试试看。
+                </p>
+                <Button variant="outline" className="mt-6" onclick="location.reload()">
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  刷新页面
+                </Button>
+              </Card>
+            ) : (
+              <Card>
+                <div class="divide-y">
+                  {emails.map((email) => {
+                    const verificationCode = extractVerificationCode(email.text, email.html)
+                    return (
+                      <div class={`relative ${!email.isRead ? "bg-primary/5" : ""}`}>
+                        <div class="block p-4 hover:bg-muted/50 transition-all group relative">
+                          <a href={`/mail/${email.id}`} class="absolute inset-0 z-0" aria-label="查看邮件详情"></a>
+                          <div class="flex justify-between items-start gap-4 relative z-10 pointer-events-none">
+                            <div class="flex-1 min-w-0">
+                              <div class="flex items-center gap-2 mb-1">
+                                <form method="POST" class="pointer-events-auto relative z-20 -ml-1 mr-1">
+                                  <input type="hidden" name="action" value="toggle_star" />
+                                  <input type="hidden" name="id" value={email.id} />
+                                  <button
+                                    type="submit"
+                                    title={email.isStarred ? "取消收藏" : "收藏邮件（防止自动删除）"}
+                                    aria-label={email.isStarred ? "取消收藏此邮件" : "收藏此邮件以防止自动删除"}
+                                    class="flex items-center justify-center p-1 rounded-full hover:bg-muted transition-colors group/star focus:outline-none focus:ring-2 focus:ring-primary/20"
+                                  >
+                                    <Star
+                                      className={`h-4 w-4 transition-all ${
+                                        email.isStarred ? "fill-yellow-400 text-yellow-400" : "text-muted-foreground/30 group-hover/star:text-yellow-400"
+                                      }`}
+                                    />
+                                  </button>
+                                </form>
+                                {!email.isRead && <span class="w-2 h-2 bg-primary rounded-full flex-shrink-0 animate-pulse" />}
+                                <span class={`font-medium truncate text-sm ${!email.isRead ? "text-foreground" : "text-muted-foreground"}`}>
+                                  {email.fromName || email.fromAddress}
+                                </span>
+                                <span class="text-xs text-muted-foreground ml-auto sm:hidden">{formatDate(email.createdAt)}</span>
+                              </div>
+                              <div class={`text-sm truncate mb-1 ${!email.isRead ? "font-medium text-foreground" : "text-muted-foreground"}`}>
+                                {email.subject || "(无主题)"}
+                              </div>
+                              <div class="flex items-center gap-2">
+                                <div class="text-xs text-muted-foreground truncate flex-1">{extractPreview(email.text, email.html)}</div>
+                                {verificationCode && (
+                                  <button
+                                    type="button"
+                                    class="copy-code-btn flex items-center gap-1.5 px-3 py-2 min-h-[44px] bg-primary/10 hover:bg-primary/20 text-primary rounded-md text-xs font-mono font-semibold transition-colors border border-primary/30 flex-shrink-0 relative z-20 pointer-events-auto"
+                                    data-code={verificationCode}
+                                    title="点击复制验证码"
+                                    onclick="event.preventDefault(); event.stopPropagation(); (async () => { const code = this.getAttribute('data-code'); if (code) { try { await navigator.clipboard.writeText(code); const originalBg = this.className; this.classList.remove('bg-primary/10', 'hover:bg-primary/20'); this.classList.add('bg-green-600', 'text-white', 'border-green-600'); const codeText = this.querySelector('.code-text'); if (codeText) { const originalText = codeText.textContent; codeText.textContent = '已复制'; setTimeout(() => { this.className = originalBg; codeText.textContent = originalText; }, 1500); } } catch (err) { console.error('复制失败:', err); } } })()"
+                                  >
+                                    <span class="code-text">{verificationCode}</span>
+                                    <Copy className="h-3 w-3" />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                            <div class="hidden sm:flex flex-col items-end gap-2">
+                              <span class="text-xs text-muted-foreground whitespace-nowrap">{formatDate(email.createdAt)}</span>
+                              <ChevronRight className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </Card>
+            )}
+          </div>
+        </main>
+      </div>
+
+      <!-- 桌面端布局 -->
+      <div class="hidden lg:flex flex-1">
+        <DesktopSidebar
+          mailboxes={mailboxes}
+          selectedMailbox={selectedMailbox || ""}
+          stats={stats}
+          services={services}
+          hasUserId={!!userId}
+        />
+
+        <!-- 桌面端邮件列表 -->
+        <main class="flex-1 bg-muted/30">
+          <div class="container max-w-4xl mx-auto px-4 py-6 lg:py-8">
+            {message && (
+              <div class="mb-6 p-4 rounded-md border bg-green-50 text-green-900 border-green-200">
+                {message}
+              </div>
+            )}
+
+            {emails.length === 0 ? (
+              <Card className="flex flex-col items-center justify-center py-16 text-center">
+                <div class="w-16 h-16 bg-muted rounded-full flex items-center justify-center mb-4">
+                  <Inbox className="w-8 h-8 text-muted-foreground" />
+                </div>
+                <h3 class="text-lg font-medium">暂无邮件</h3>
+                <p class="text-muted-foreground mt-2 max-w-sm">
+                  您的收件箱是空的。发送邮件到 <span class="font-mono text-foreground bg-muted px-1 rounded">{selectedMailbox}</span> 试试看。
+                </p>
+                <Button variant="outline" className="mt-6" onclick="location.reload()">
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  刷新页面
+                </Button>
+              </Card>
+            ) : (
+              <Card>
+                <div class="divide-y">
+                  {emails.map((email) => {
+                    const verificationCode = extractVerificationCode(email.text, email.html)
+                    return (
+                      <div class={`relative ${!email.isRead ? "bg-primary/5" : ""}`}>
+                        <div class="block p-4 hover:bg-muted/50 transition-all group relative">
+                          <a href={`/mail/${email.id}`} class="absolute inset-0 z-0" aria-label="查看邮件详情"></a>
+                          <div class="flex justify-between items-start gap-4 relative z-10 pointer-events-none">
+                            <div class="flex-1 min-w-0">
+                              <div class="flex items-center gap-2 mb-1">
+                                <form method="POST" class="pointer-events-auto relative z-20 -ml-1 mr-1">
+                                  <input type="hidden" name="action" value="toggle_star" />
+                                  <input type="hidden" name="id" value={email.id} />
+                                  <button
+                                    type="submit"
+                                    title={email.isStarred ? "取消收藏" : "收藏邮件（防止自动删除）"}
+                                    aria-label={email.isStarred ? "取消收藏此邮件" : "收藏此邮件以防止自动删除"}
+                                    class="flex items-center justify-center p-1 rounded-full hover:bg-muted transition-colors group/star focus:outline-none focus:ring-2 focus:ring-primary/20"
+                                  >
+                                    <Star
+                                      className={`h-4 w-4 transition-all ${
+                                        email.isStarred ? "fill-yellow-400 text-yellow-400" : "text-muted-foreground/30 group-hover/star:text-yellow-400"
+                                      }`}
+                                    />
+                                  </button>
+                                </form>
+                                {!email.isRead && <span class="w-2 h-2 bg-primary rounded-full flex-shrink-0 animate-pulse" />}
+                                <span class={`font-medium truncate text-sm ${!email.isRead ? "text-foreground" : "text-muted-foreground"}`}>
+                                  {email.fromName || email.fromAddress}
+                                </span>
+                                <span class="text-xs text-muted-foreground ml-auto sm:hidden">{formatDate(email.createdAt)}</span>
+                              </div>
+                              <div class={`text-sm truncate mb-1 ${!email.isRead ? "font-medium text-foreground" : "text-muted-foreground"}`}>
+                                {email.subject || "(无主题)"}
+                              </div>
+                              <div class="flex items-center gap-2">
+                                <div class="text-xs text-muted-foreground truncate flex-1">{extractPreview(email.text, email.html)}</div>
+                                {verificationCode && (
+                                  <button
+                                    type="button"
+                                    class="copy-code-btn flex items-center gap-1.5 px-3 py-2 min-h-[44px] bg-primary/10 hover:bg-primary/20 text-primary rounded-md text-xs font-mono font-semibold transition-colors border border-primary/30 flex-shrink-0 relative z-20 pointer-events-auto"
+                                    data-code={verificationCode}
+                                    title="点击复制验证码"
+                                    onclick="event.preventDefault(); event.stopPropagation(); (async () => { const code = this.getAttribute('data-code'); if (code) { try { await navigator.clipboard.writeText(code); const originalBg = this.className; this.classList.remove('bg-primary/10', 'hover:bg-primary/20'); this.classList.add('bg-green-600', 'text-white', 'border-green-600'); const codeText = this.querySelector('.code-text'); if (codeText) { const originalText = codeText.textContent; codeText.textContent = '已复制'; setTimeout(() => { this.className = originalBg; codeText.textContent = originalText; }, 1500); } } catch (err) { console.error('复制失败:', err); } } })()"
+                                  >
+                                    <span class="code-text">{verificationCode}</span>
+                                    <Copy className="h-3 w-3" />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                            <div class="hidden sm:flex flex-col items-end gap-2">
+                              <span class="text-xs text-muted-foreground whitespace-nowrap">{formatDate(email.createdAt)}</span>
+                              <ChevronRight className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </Card>
+            )}
+          </div>
+        </main>
+      </div>
+    </div>
+  )}
+</Layout>

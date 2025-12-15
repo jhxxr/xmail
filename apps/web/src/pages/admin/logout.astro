@@ -1,0 +1,5 @@
+---
+// 退出登录
+Astro.cookies.delete("admin_token", { path: "/" })
+return Astro.redirect("/admin/login")
+---

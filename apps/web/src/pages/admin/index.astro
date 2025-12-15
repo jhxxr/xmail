@@ -1,0 +1,119 @@
+---
+import AdminLayout from "../../layouts/AdminLayout.astro"
+import { createDB, getStats, getAdminById, getMailDomain } from "database"
+import { verifyToken } from "../../lib/auth"
+import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
+import { Button } from "../../components/ui/button"
+import { Users, Mail, FileText, Settings } from "lucide-react"
+
+const db = createDB(Astro.locals.runtime.env.DB)
+const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
+
+// 验证登录
+const token = Astro.cookies.get("admin_token")?.value
+if (!token) return Astro.redirect("/admin/login")
+const payload = await verifyToken(token, jwtSecret)
+if (!payload || payload.type !== "admin") {
+  Astro.cookies.delete("admin_token", { path: "/" })
+  return Astro.redirect("/admin/login")
+}
+const admin = await getAdminById(db, payload.id)
+if (!admin) {
+  Astro.cookies.delete("admin_token", { path: "/" })
+  return Astro.redirect("/admin/login")
+}
+
+const [stats, mailDomain] = await Promise.all([getStats(db), getMailDomain(db)])
+---
+
+<AdminLayout title="概览">
+  <div class="space-y-6 md:space-y-8">
+    <div class="flex justify-between items-center">
+      <div>
+        <h1 class="text-2xl md:text-3xl font-bold tracking-tight">概览</h1>
+        <p class="text-muted-foreground mt-1 md:mt-2 text-sm">欢迎回来, {admin.username}</p>
+      </div>
+    </div>
+
+    <div class="grid gap-4 grid-cols-2 lg:grid-cols-4">
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+          <CardTitle className="text-sm font-medium">用户总数</CardTitle>
+          <Users className="h-4 w-4 text-muted-foreground" />
+        </CardHeader>
+        <CardContent>
+          <div class="text-2xl font-bold">{stats.totalUsers}</div>
+          <p class="text-xs text-muted-foreground">系统注册用户</p>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+          <CardTitle className="text-sm font-medium">邮箱总数</CardTitle>
+          <Mail className="h-4 w-4 text-muted-foreground" />
+        </CardHeader>
+        <CardContent>
+          <div class="text-2xl font-bold">{stats.totalMailboxes}</div>
+          <p class="text-xs text-muted-foreground">未分配: {stats.unassignedMailboxes}</p>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+          <CardTitle className="text-sm font-medium">邮件总数</CardTitle>
+          <FileText className="h-4 w-4 text-muted-foreground" />
+        </CardHeader>
+        <CardContent>
+          <div class="text-2xl font-bold">{stats.totalEmails}</div>
+          <p class="text-xs text-muted-foreground">已接收邮件</p>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+          <CardTitle className="text-sm font-medium">默认域名</CardTitle>
+          <Settings className="h-4 w-4 text-muted-foreground" />
+        </CardHeader>
+        <CardContent>
+          <div class="text-2xl font-bold truncate" title={mailDomain}>{mailDomain || "未设置"}</div>
+          {mailDomain === "example.com" && (
+            <a href="/admin/settings" class="text-xs text-primary hover:underline">
+              去设置
+            </a>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+
+    <Card>
+      <CardHeader>
+        <CardTitle>快捷操作</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div class="flex gap-4 flex-wrap">
+          <a href="/admin/users?action=create">
+            <Button>
+              <Users className="mr-2 h-4 w-4" />
+              创建用户
+            </Button>
+          </a>
+          <a href="/admin/mailboxes">
+            <Button variant="secondary">
+              <Mail className="mr-2 h-4 w-4" />
+              批量生成邮箱
+            </Button>
+          </a>
+          <a href="/admin/mailboxes?filter=unassigned">
+            <Button variant="outline">
+              <Mail className="mr-2 h-4 w-4" />
+              未分配邮箱
+            </Button>
+          </a>
+          <a href="/admin/emails">
+            <Button variant="ghost">
+              <FileText className="mr-2 h-4 w-4" />
+              查看邮件
+            </Button>
+          </a>
+        </div>
+      </CardContent>
+    </Card>
+  </div>
+</AdminLayout>
