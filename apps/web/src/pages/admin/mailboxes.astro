@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { ServiceManager } from "../../components/admin/ServiceManager"
 import { SharedMailboxManager } from "../../components/admin/SharedMailboxManager"
 import { AssignUserManager } from "../../components/admin/AssignUserManager"
-import { Mail, Power, Trash2, FileText, Plus, X, Copy, Check, Eye, UserPlus, Link2, Users } from "lucide-react"
+import { Mail, Power, Trash2, FileText, Plus, X, Copy, Check, Eye, EyeOff, UserPlus, Link2, Users } from "lucide-react"
 
 const db = createDB(Astro.locals.runtime.env.DB)
 const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
@@ -322,6 +322,10 @@ if (serviceFilters.length > 0) {
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2 h-4 w-4"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
           导出选中 (<span id="exportCount">0</span>)
         </button>
+        <button id="copySelectedBtn" class="hidden inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-purple-600 text-white hover:bg-purple-700 h-9 px-4">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2 h-4 w-4"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+          复制选中 (<span id="copyCount">0</span>)
+        </button>
         <button id="batchDeleteBtn" class="hidden inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-destructive text-destructive-foreground hover:bg-destructive/90 h-9 px-4">
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2 h-4 w-4"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
           删除选中 (<span id="selectedCount">0</span>)
@@ -422,6 +426,7 @@ if (serviceFilters.length > 0) {
                   <input type="checkbox" id="selectAll" class="rounded border-gray-300" />
                 </th>
                 <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">邮箱地址</th>
+                <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">密码</th>
                 <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">关联服务</th>
                 <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">分配给</th>
                 <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">状态</th>
@@ -431,7 +436,7 @@ if (serviceFilters.length > 0) {
             </thead>
           <tbody class="[&_tr:last-child]:border-0">
             {mailboxes.length === 0 ? (
-              <tr><td colspan="7" class="p-4 text-center text-muted-foreground">暂无邮箱</td></tr>
+              <tr><td colspan="8" class="p-4 text-center text-muted-foreground">暂无邮箱</td></tr>
             ) : (
               mailboxes.map((mb) => {
                 const services = servicesMap[mb.address] || []
@@ -442,6 +447,28 @@ if (serviceFilters.length > 0) {
                         <input type="checkbox" name="addresses[]" value={mb.address} class="mailbox-checkbox rounded border-gray-300" />
                       </td>
                       <td class="p-4 align-middle font-mono">{mb.address}</td>
+                      <td class="p-4 align-middle">
+                        <div class="flex items-center gap-2">
+                          <span class="password-display font-mono text-sm select-none" data-mailbox={mb.address}>••••••••</span>
+                          <button
+                            type="button"
+                            class="toggle-password-btn inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-7 w-7 text-muted-foreground"
+                            data-mailbox={mb.address}
+                            title="显示/隐藏密码"
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            class="copy-password-btn inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-7 w-7 text-muted-foreground disabled:opacity-50"
+                            data-mailbox={mb.address}
+                            title="复制密码"
+                            disabled
+                          >
+                            <Copy className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </td>
                       <td class="p-4 align-middle">
                         <ServiceManager
                           client:load
@@ -541,6 +568,30 @@ if (serviceFilters.length > 0) {
                         <Badge variant="secondary" className="text-xs">未分配</Badge>
                       )}
                     </div>
+                  </div>
+                </div>
+
+                <div class="space-y-2">
+                  <div class="text-xs text-muted-foreground font-medium">密码</div>
+                  <div class="flex items-center gap-2">
+                    <span class="password-display font-mono text-sm select-none" data-mailbox={mb.address}>••••••••</span>
+                    <button
+                      type="button"
+                      class="toggle-password-btn inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-7 w-7 text-muted-foreground"
+                      data-mailbox={mb.address}
+                      title="显示/隐藏密码"
+                    >
+                      <Eye className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      class="copy-password-btn inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-7 w-7 text-muted-foreground disabled:opacity-50"
+                      data-mailbox={mb.address}
+                      title="复制密码"
+                      disabled
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                    </button>
                   </div>
                 </div>
 
@@ -696,6 +747,85 @@ if (serviceFilters.length > 0) {
             </button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <!-- 批量复制配置 Modal -->
+    <div id="copyConfigModal" class="fixed inset-0 z-50 hidden items-center justify-center">
+      <!-- Backdrop -->
+      <div class="fixed inset-0 bg-black/50" id="copyConfigBackdrop"></div>
+
+      <!-- Dialog -->
+      <div class="relative z-50 w-full max-w-md rounded-lg border bg-background p-6 shadow-lg mx-4">
+        <!-- Close button -->
+        <button
+          type="button"
+          id="closeCopyConfigBtn"
+          class="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-4 w-4"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          <span class="sr-only">关闭</span>
+        </button>
+
+        <div class="flex flex-col space-y-1.5 text-center sm:text-left mb-6">
+          <h2 class="text-lg font-semibold leading-none tracking-tight">批量复制配置</h2>
+          <p class="text-sm text-muted-foreground">
+            已选择 <span id="copyConfigCount" class="font-bold text-foreground">0</span> 个邮箱
+          </p>
+        </div>
+
+        <div class="space-y-4">
+          <!-- 分隔符选择 -->
+          <div class="space-y-2">
+            <label class="text-sm font-medium leading-none">账号密码分隔符</label>
+            <div class="flex gap-2 flex-wrap">
+              <button type="button" class="separator-btn inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors h-9 px-4 border border-input bg-background hover:bg-accent hover:text-accent-foreground" data-separator=":">
+                冒号 (:)
+              </button>
+              <button type="button" class="separator-btn inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors h-9 px-4 border border-input bg-background hover:bg-accent hover:text-accent-foreground" data-separator="----">
+                横线 (----)
+              </button>
+              <button type="button" class="separator-btn inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors h-9 px-4 border border-input bg-background hover:bg-accent hover:text-accent-foreground" data-separator=",">
+                逗号 (,)
+              </button>
+              <button type="button" class="separator-btn inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors h-9 px-4 border border-input bg-background hover:bg-accent hover:text-accent-foreground" data-separator="|">
+                竖线 (|)
+              </button>
+              <button type="button" class="separator-btn inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors h-9 px-4 border border-input bg-background hover:bg-accent hover:text-accent-foreground" data-separator="	">
+                Tab
+              </button>
+            </div>
+          </div>
+
+          <!-- 自定义分隔符 -->
+          <div class="space-y-2">
+            <label class="text-sm font-medium leading-none">或自定义分隔符</label>
+            <input
+              type="text"
+              id="customSeparator"
+              placeholder="例如: @@ 或 ### 等"
+              class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+            />
+          </div>
+
+          <!-- 预览 -->
+          <div class="space-y-2">
+            <label class="text-sm font-medium leading-none">预览格式</label>
+            <div class="p-3 rounded-md border bg-muted/30 font-mono text-xs">
+              <div id="copyPreview" class="text-muted-foreground">example@domain.com:password123</div>
+            </div>
+          </div>
+
+          <div class="flex justify-end gap-3 pt-4 border-t">
+            <button type="button" id="cancelCopyConfigBtn" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors border border-input bg-background hover:bg-accent hover:text-accent-foreground h-10 px-4 py-2">
+              取消
+            </button>
+            <button type="button" id="confirmCopyBtn" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-purple-600 hover:bg-purple-700 text-white h-10 px-4 py-2">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2 h-4 w-4"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+              复制到剪贴板
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -951,23 +1081,28 @@ if (serviceFilters.length > 0) {
     const mailboxCheckboxes = document.querySelectorAll('.mailbox-checkbox')
     const batchDeleteBtn = document.getElementById('batchDeleteBtn')
     const exportSelectedBtn = document.getElementById('exportSelectedBtn')
+    const copySelectedBtn = document.getElementById('copySelectedBtn')
     const selectedCountSpan = document.getElementById('selectedCount')
     const exportCountSpan = document.getElementById('exportCount')
+    const copyCountSpan = document.getElementById('copyCount')
     const batchDeleteForm = document.getElementById('batchDeleteForm')
 
     function updateBatchButtons() {
       const selectedCount = Array.from(mailboxCheckboxes).filter(cb => cb.checked).length
       if (selectedCountSpan) selectedCountSpan.textContent = selectedCount.toString()
       if (exportCountSpan) exportCountSpan.textContent = selectedCount.toString()
+      if (copyCountSpan) copyCountSpan.textContent = selectedCount.toString()
 
       if (selectedCount > 0) {
         batchBindServiceBtn?.classList.remove('hidden')
         batchDeleteBtn?.classList.remove('hidden')
         exportSelectedBtn?.classList.remove('hidden')
+        copySelectedBtn?.classList.remove('hidden')
       } else {
         batchBindServiceBtn?.classList.add('hidden')
         batchDeleteBtn?.classList.add('hidden')
         exportSelectedBtn?.classList.add('hidden')
+        copySelectedBtn?.classList.add('hidden')
       }
     }
 
@@ -1077,6 +1212,180 @@ if (serviceFilters.length > 0) {
       }
     })
 
+    // 批量复制配置 Modal
+    const copyConfigModal = document.getElementById('copyConfigModal')
+    const closeCopyConfigBtn = document.getElementById('closeCopyConfigBtn')
+    const cancelCopyConfigBtn = document.getElementById('cancelCopyConfigBtn')
+    const copyConfigBackdrop = document.getElementById('copyConfigBackdrop')
+    const copyConfigCount = document.getElementById('copyConfigCount')
+    const confirmCopyBtn = document.getElementById('confirmCopyBtn')
+    const customSeparatorInput = document.getElementById('customSeparator')
+    const copyPreview = document.getElementById('copyPreview')
+
+    let currentSeparator = ':' // 默认分隔符
+
+    // 关闭复制配置 Modal
+    const closeCopyConfigModal = () => {
+      copyConfigModal?.classList.add('hidden')
+      copyConfigModal?.classList.remove('flex')
+      document.body.style.overflow = ''
+    }
+
+    closeCopyConfigBtn?.addEventListener('click', closeCopyConfigModal)
+    cancelCopyConfigBtn?.addEventListener('click', closeCopyConfigModal)
+    copyConfigBackdrop?.addEventListener('click', closeCopyConfigModal)
+
+    // 更新预览
+    const updateCopyPreview = () => {
+      const separator = customSeparatorInput?.value || currentSeparator
+      if (copyPreview) {
+        copyPreview.textContent = `example@domain.com${separator}password123`
+      }
+    }
+
+    // 分隔符按钮点击
+    document.querySelectorAll('.separator-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        // 移除其他按钮的选中状态
+        document.querySelectorAll('.separator-btn').forEach(b => {
+          b.classList.remove('bg-primary', 'text-primary-foreground')
+          b.classList.add('border', 'border-input', 'bg-background', 'hover:bg-accent', 'hover:text-accent-foreground')
+        })
+
+        // 设置当前按钮为选中状态
+        btn.classList.remove('border', 'border-input', 'bg-background', 'hover:bg-accent', 'hover:text-accent-foreground')
+        btn.classList.add('bg-primary', 'text-primary-foreground')
+
+        currentSeparator = btn.getAttribute('data-separator') || ':'
+        if (customSeparatorInput) customSeparatorInput.value = ''
+        updateCopyPreview()
+      })
+    })
+
+    // 自定义分隔符输入
+    customSeparatorInput?.addEventListener('input', () => {
+      // 清除预设按钮的选中状态
+      document.querySelectorAll('.separator-btn').forEach(b => {
+        b.classList.remove('bg-primary', 'text-primary-foreground')
+        b.classList.add('border', 'border-input', 'bg-background', 'hover:bg-accent', 'hover:text-accent-foreground')
+      })
+      updateCopyPreview()
+    })
+
+    // 打开批量复制配置 Modal
+    copySelectedBtn?.addEventListener('click', () => {
+      const selectedCheckboxes = document.querySelectorAll('.mailbox-checkbox:checked')
+      if (selectedCheckboxes.length === 0) return alert('请先选择邮箱')
+
+      // 更新计数
+      if (copyConfigCount) copyConfigCount.textContent = selectedCheckboxes.length.toString()
+
+      // 设置默认选中冒号
+      const defaultBtn = document.querySelector('.separator-btn[data-separator=":"]')
+      if (defaultBtn) {
+        document.querySelectorAll('.separator-btn').forEach(b => {
+          b.classList.remove('bg-primary', 'text-primary-foreground')
+          b.classList.add('border', 'border-input', 'bg-background', 'hover:bg-accent', 'hover:text-accent-foreground')
+        })
+        defaultBtn.classList.remove('border', 'border-input', 'bg-background', 'hover:bg-accent', 'hover:text-accent-foreground')
+        defaultBtn.classList.add('bg-primary', 'text-primary-foreground')
+      }
+
+      currentSeparator = ':'
+      if (customSeparatorInput) customSeparatorInput.value = ''
+      updateCopyPreview()
+
+      // 显示 Modal
+      copyConfigModal?.classList.remove('hidden')
+      copyConfigModal?.classList.add('flex')
+      document.body.style.overflow = 'hidden'
+    })
+
+    // 确认复制
+    confirmCopyBtn?.addEventListener('click', async () => {
+      const selectedAddresses = Array.from(mailboxCheckboxes)
+        .filter(cb => cb.checked)
+        .map(cb => cb.value)
+
+      if (selectedAddresses.length === 0) return
+
+      // 获取最终分隔符
+      const finalSeparator = customSeparatorInput?.value || currentSeparator
+
+      // 显示加载状态
+      confirmCopyBtn.disabled = true
+      const originalText = confirmCopyBtn.innerHTML
+      confirmCopyBtn.innerHTML = '<span class="inline-flex items-center gap-2"><span class="animate-spin">⏳</span> 处理中...</span>'
+
+      try {
+        // 并行获取所有邮箱的密码
+        const results = await Promise.all(
+          selectedAddresses.map(async (address) => {
+            try {
+              const formData = new FormData()
+              formData.append('action', 'view_password')
+              formData.append('address', address)
+
+              const response = await fetch(window.location.pathname, {
+                method: 'POST',
+                body: formData
+              })
+
+              if (!response.ok) {
+                console.error(`HTTP ${response.status} for ${address}`)
+                return { address, password: null, error: `HTTP ${response.status}` }
+              }
+
+              const html = await response.text()
+              // 解析返回的HTML获取密码
+              const parser = new DOMParser()
+              const doc = parser.parseFromString(html, 'text/html')
+              const passwordCell = doc.querySelector('.bg-green-50 table tbody tr td:nth-child(2)')
+              const password = passwordCell?.textContent?.trim()
+
+              return { address, password, error: password ? null : '无密码' }
+            } catch (err) {
+              console.error(`Failed to get password for ${address}:`, err)
+              return { address, password: null, error: err.message }
+            }
+          })
+        )
+
+        // 分离成功和失败的记录
+        const credentials = results.filter(r => r.password)
+        const failures = results.filter(r => !r.password)
+
+        if (credentials.length === 0) {
+          alert('未能获取任何密码，请确保选中的邮箱有设置密码')
+          return
+        }
+
+        // 生成复制文本，一行一个
+        const text = credentials.map(c => `${c.address}${finalSeparator}${c.password}`).join('\n')
+
+        // 复制到剪贴板
+        await navigator.clipboard.writeText(text)
+
+        // 关闭 Modal
+        closeCopyConfigModal()
+
+        // 显示结果
+        if (failures.length > 0) {
+          const failureDetails = failures.map(f => `- ${f.address}: ${f.error}`).join('\n')
+          alert(`复制成功！\n\n成功: ${credentials.length} 个\n失败: ${failures.length} 个\n\n失败详情:\n${failureDetails}`)
+        } else {
+          alert(`已复制 ${credentials.length} 个邮箱账号密码到剪贴板`)
+        }
+      } catch (err) {
+        console.error('Copy failed:', err)
+        alert(`复制失败: ${err.message}`)
+      } finally {
+        // 恢复按钮状态
+        confirmCopyBtn.disabled = false
+        confirmCopyBtn.innerHTML = originalText
+      }
+    })
+
     // 复制快捷登录链接
     document.querySelectorAll('.copy-link-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
@@ -1125,6 +1434,114 @@ if (serviceFilters.length > 0) {
       if (confirm(`确定要删除选中的 ${selectedCount} 个邮箱吗？邮箱将移至回收站，可在回收站中恢复。`)) {
         batchDeleteForm.submit()
       }
+    })
+
+    // 密码显示/隐藏和复制功能
+    const passwordCache = new Map() // 缓存已获取的密码
+
+    // 切换密码显示/隐藏
+    document.querySelectorAll('.toggle-password-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const mailbox = btn.getAttribute('data-mailbox')
+        if (!mailbox) return
+
+        const passwordDisplay = document.querySelector(`.password-display[data-mailbox="${mailbox}"]`)
+        const copyBtn = document.querySelector(`.copy-password-btn[data-mailbox="${mailbox}"]`)
+        if (!passwordDisplay) return
+
+        const isHidden = passwordDisplay.textContent === '••••••••'
+
+        if (isHidden) {
+          // 需要显示密码
+          if (passwordCache.has(mailbox)) {
+            // 从缓存中获取
+            passwordDisplay.textContent = passwordCache.get(mailbox)
+            passwordDisplay.classList.add('select-text')
+            btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></svg>'
+            btn.title = "隐藏密码"
+            if (copyBtn) copyBtn.disabled = false
+          } else {
+            // 从服务器获取密码
+            const originalIcon = btn.innerHTML
+            btn.disabled = true
+            btn.innerHTML = '<svg class="animate-spin h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>'
+
+            try {
+              const formData = new FormData()
+              formData.append('action', 'view_password')
+              formData.append('address', mailbox)
+
+              const response = await fetch(window.location.pathname, {
+                method: 'POST',
+                body: formData
+              })
+
+              if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`)
+              }
+
+              const html = await response.text()
+              const parser = new DOMParser()
+              const doc = parser.parseFromString(html, 'text/html')
+              const passwordCell = doc.querySelector('.bg-green-50 table tbody tr td:nth-child(2)')
+              const password = passwordCell?.textContent?.trim()
+
+              if (password) {
+                passwordCache.set(mailbox, password)
+                passwordDisplay.textContent = password
+                passwordDisplay.classList.add('select-text')
+                btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></svg>'
+                btn.title = "隐藏密码"
+                if (copyBtn) copyBtn.disabled = false
+              } else {
+                passwordDisplay.textContent = '无密码'
+                passwordDisplay.classList.add('text-muted-foreground', 'italic')
+                btn.innerHTML = originalIcon
+              }
+            } catch (err) {
+              console.error('Failed to get password:', err)
+              passwordDisplay.textContent = '获取失败'
+              passwordDisplay.classList.add('text-destructive')
+              btn.innerHTML = originalIcon
+            } finally {
+              btn.disabled = false
+            }
+          }
+        } else {
+          // 隐藏密码
+          passwordDisplay.textContent = '••••••••'
+          passwordDisplay.classList.remove('select-text', 'text-muted-foreground', 'italic', 'text-destructive')
+          btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>'
+          btn.title = "显示密码"
+        }
+      })
+    })
+
+    // 复制密码
+    document.querySelectorAll('.copy-password-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const mailbox = btn.getAttribute('data-mailbox')
+        if (!mailbox || !passwordCache.has(mailbox)) return
+
+        const password = passwordCache.get(mailbox)
+        const originalIcon = btn.innerHTML
+
+        try {
+          await navigator.clipboard.writeText(password)
+
+          // 显示成功状态
+          btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-green-600"><polyline points="20 6 9 17 4 12"></polyline></svg>'
+          btn.classList.add('text-green-600')
+
+          setTimeout(() => {
+            btn.innerHTML = originalIcon
+            btn.classList.remove('text-green-600')
+          }, 2000)
+        } catch (err) {
+          console.error('Failed to copy password:', err)
+          alert('复制失败: ' + err.message)
+        }
+      })
     })
   </script>
 </AdminLayout>
