@@ -1,0 +1,369 @@
+---
+import AdminLayout from "../../layouts/AdminLayout.astro"
+import {
+  assignTwoFactorEntryToUsers,
+  createDB,
+  createLog,
+  createTwoFactorEntry,
+  deleteTwoFactorEntry,
+  getAdminById,
+  getTwoFactorEntry,
+  getTwoFactorEntryUsers,
+  listTwoFactorEntries,
+  listUsers,
+  updateTwoFactorEntry,
+} from "database"
+import { verifyToken } from "../../lib/auth"
+import { parseTotpInput } from "../../lib/totp"
+import { formatDate } from "../../lib/utils"
+import { TwoFactorAssignmentManager } from "../../components/admin/TwoFactorAssignmentManager"
+import QrImportPanel from "../../components/totp/QrImportPanel"
+import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
+import { Button } from "../../components/ui/button"
+import { Input } from "../../components/ui/input"
+import { Badge } from "../../components/ui/badge"
+import { Pencil, Plus, ShieldCheck, Trash2 } from "lucide-react"
+
+const db = createDB(Astro.locals.runtime.env.DB)
+const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
+
+const token = Astro.cookies.get("admin_token")?.value
+if (!token) return Astro.redirect("/admin/login")
+const payload = await verifyToken(token, jwtSecret)
+if (!payload || payload.type !== "admin") return Astro.redirect("/admin/login")
+const admin = await getAdminById(db, payload.id)
+if (!admin) return Astro.redirect("/admin/login")
+
+let message = ""
+let messageType: "success" | "error" = "success"
+
+function getOptionalText(formData: FormData, key: string): string | null {
+  const value = formData.get(key)?.toString()?.trim()
+  return value ? value : null
+}
+
+if (Astro.request.method === "POST") {
+  const formData = await Astro.request.formData()
+  const action = formData.get("action")?.toString()
+
+  try {
+    if (action === "create") {
+      const parsed = parseTotpInput(formData.get("secret_input")?.toString() || "", {
+        name: getOptionalText(formData, "name"),
+        issuer: getOptionalText(formData, "issuer"),
+        accountName: getOptionalText(formData, "account_name"),
+        digits: Number(formData.get("digits")?.toString() || "6"),
+        period: Number(formData.get("period")?.toString() || "30"),
+        algorithm: formData.get("algorithm")?.toString() || "SHA1",
+        note: getOptionalText(formData, "note"),
+      })
+
+      const entry = await createTwoFactorEntry(db, {
+        ...parsed,
+        createdBy: admin.id,
+      })
+      await createLog(db, {
+        adminId: admin.id,
+        action: "create_two_factor_entry",
+        target: entry.id,
+        details: { name: parsed.name, issuer: parsed.issuer, accountName: parsed.accountName },
+      })
+      message = "2FA 条目创建成功"
+    } else if (action === "edit") {
+      const id = formData.get("id")?.toString()
+      if (id) {
+        const parsed = parseTotpInput(formData.get("secret_input")?.toString() || "", {
+          name: getOptionalText(formData, "name"),
+          issuer: getOptionalText(formData, "issuer"),
+          accountName: getOptionalText(formData, "account_name"),
+          digits: Number(formData.get("digits")?.toString() || "6"),
+          period: Number(formData.get("period")?.toString() || "30"),
+          algorithm: formData.get("algorithm")?.toString() || "SHA1",
+          note: getOptionalText(formData, "note"),
+        })
+
+        await updateTwoFactorEntry(db, id, parsed)
+        await createLog(db, {
+          adminId: admin.id,
+          action: "update_two_factor_entry",
+          target: id,
+          details: { name: parsed.name, issuer: parsed.issuer, accountName: parsed.accountName },
+        })
+        return Astro.redirect("/admin/two-factor?msg=updated")
+      }
+    } else if (action === "delete") {
+      const id = formData.get("id")?.toString()
+      if (id) {
+        await deleteTwoFactorEntry(db, id)
+        await createLog(db, {
+          adminId: admin.id,
+          action: "delete_two_factor_entry",
+          target: id,
+        })
+        message = "2FA 条目已删除"
+      }
+    } else if (action === "assign_users") {
+      const id = formData.get("id")?.toString()
+      const userIds = formData.getAll("user_ids[]").map((userId) => userId.toString()).filter(Boolean)
+      if (id) {
+        await assignTwoFactorEntryToUsers(db, id, userIds)
+        await createLog(db, {
+          adminId: admin.id,
+          action: "assign_two_factor_entry_users",
+          target: id,
+          details: { userIds },
+        })
+        message = "2FA 分配已更新"
+      }
+    }
+  } catch (cause: any) {
+    message = cause?.message || "操作失败"
+    messageType = "error"
+  }
+}
+
+if (Astro.url.searchParams.get("msg") === "updated") {
+  message = "2FA 条目更新成功"
+  messageType = "success"
+}
+
+const users = await listUsers(db, { limit: 200 })
+const entries = await listTwoFactorEntries(db)
+const entryAssignments = await Promise.all(
+  entries.map(async (entry) => [entry.id, await getTwoFactorEntryUsers(db, entry.id)] as const)
+)
+
+const assignmentMap = Object.fromEntries(
+  entryAssignments.map(([entryId, assignments]) => [
+    entryId,
+    assignments.map((assignment) => {
+      const user = users.find((item) => item.id === assignment.userId)
+      return {
+        userId: assignment.userId,
+        userName: user?.name || user?.note || `${user?.token.slice(0, 8) || assignment.userId}...`,
+      }
+    }),
+  ])
+)
+
+const urlAction = Astro.url.searchParams.get("action")
+const editId = Astro.url.searchParams.get("id")
+const editEntry = urlAction === "edit" && editId ? await getTwoFactorEntry(db, editId, { includeSecret: true }) : null
+const showCreateForm = urlAction === "create"
+const showEditForm = urlAction === "edit" && !!editEntry
+---
+
+<AdminLayout title="2FA 管理">
+  <div class="space-y-6">
+    <div class="flex items-center justify-between gap-4">
+      <div>
+        <h1 class="text-3xl font-bold tracking-tight">2FA 管理</h1>
+        <p class="mt-1 text-sm text-muted-foreground">集中维护 2FA 密钥，并分配给指定用户使用。</p>
+      </div>
+      <a href={(showCreateForm || showEditForm) ? "/admin/two-factor" : "/admin/two-factor?action=create"}>
+        <Button>
+          {(showCreateForm || showEditForm)
+            ? "返回列表"
+            : <><Plus className="mr-2 h-4 w-4" /> 新建 2FA</>}
+        </Button>
+      </a>
+    </div>
+
+    {message && (
+      <div class={`rounded-md border p-4 ${messageType === "success" ? "border-green-200 bg-green-50 text-green-900" : "border-red-200 bg-red-50 text-red-900"}`}>
+        {message}
+      </div>
+    )}
+
+    {(showCreateForm || showEditForm) && (
+      <Card>
+        <CardHeader>
+          <CardTitle>{showEditForm ? "编辑 2FA 条目" : "创建 2FA 条目"}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form method="POST" class="grid gap-4 lg:grid-cols-2">
+            <input type="hidden" name="action" value={showEditForm ? "edit" : "create"} />
+            {showEditForm && <input type="hidden" name="id" value={editEntry!.id} />}
+
+            <div class="space-y-2">
+              <label class="text-sm font-medium">名称</label>
+              <Input id="two-factor-name-input" name="name" value={editEntry?.name || ""} placeholder="例如：Gmail 主号" />
+            </div>
+
+            <div class="space-y-2">
+              <label class="text-sm font-medium">服务商</label>
+              <Input id="two-factor-issuer-input" name="issuer" value={editEntry?.issuer || ""} placeholder="例如：Google" />
+            </div>
+
+            <div class="space-y-2">
+              <label class="text-sm font-medium">账号</label>
+              <Input id="two-factor-account-input" name="account_name" value={editEntry?.accountName || ""} placeholder="例如：demo@gmail.com" />
+            </div>
+
+            <div class="space-y-2">
+              <label class="text-sm font-medium">算法</label>
+              <select id="two-factor-algorithm-input" name="algorithm" class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm">
+                {["SHA1", "SHA256", "SHA512"].map((algorithm) => (
+                  <option value={algorithm} selected={(editEntry?.algorithm || "SHA1") === algorithm}>{algorithm}</option>
+                ))}
+              </select>
+            </div>
+
+            <div class="space-y-2">
+              <label class="text-sm font-medium">位数</label>
+              <Input id="two-factor-digits-input" type="number" min="4" max="10" name="digits" value={String(editEntry?.digits || 6)} />
+            </div>
+
+            <div class="space-y-2">
+              <label class="text-sm font-medium">周期（秒）</label>
+              <Input id="two-factor-period-input" type="number" min="5" max="300" name="period" value={String(editEntry?.period || 30)} />
+            </div>
+
+            <div class="space-y-2 lg:col-span-2">
+              <label class="text-sm font-medium">2FA 密钥 / otpauth 链接</label>
+              <textarea
+                id="two-factor-secret-input"
+                name="secret_input"
+                required
+                class="min-h-[110px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none focus:border-primary"
+                placeholder="支持 Base32 密钥，或直接粘贴 otpauth://totp/... 链接"
+              >{editEntry?.secret || ""}</textarea>
+            </div>
+
+            <div class="lg:col-span-2">
+              <QrImportPanel
+                client:load
+                secretInputId="two-factor-secret-input"
+                nameInputId="two-factor-name-input"
+                issuerInputId="two-factor-issuer-input"
+                accountInputId="two-factor-account-input"
+                digitsInputId="two-factor-digits-input"
+                periodInputId="two-factor-period-input"
+                algorithmInputId="two-factor-algorithm-input"
+                autoSubmitCheckboxId="two-factor-auto-submit"
+                submitButtonId="two-factor-submit-button"
+              />
+            </div>
+
+            <div class="lg:col-span-2 flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm">
+              <input
+                id="two-factor-auto-submit"
+                type="checkbox"
+                class="h-4 w-4 rounded border-gray-300"
+              />
+              <label for="two-factor-auto-submit" class="cursor-pointer select-none">
+                扫码成功后自动{showEditForm ? "保存" : "创建"} 2FA
+              </label>
+            </div>
+
+            <div class="space-y-2 lg:col-span-2">
+              <label class="text-sm font-medium">备注</label>
+              <textarea
+                name="note"
+                class="min-h-[88px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none focus:border-primary"
+                placeholder="例如：用于团队共享的注册辅助账号"
+              >{editEntry?.note || ""}</textarea>
+            </div>
+
+            <div class="flex gap-2 lg:col-span-2">
+              <Button id="two-factor-submit-button" type="submit">
+                <ShieldCheck className="mr-2 h-4 w-4" />
+                {showEditForm ? "保存更改" : "创建条目"}
+              </Button>
+              <a href="/admin/two-factor">
+                <Button type="button" variant="outline">取消</Button>
+              </a>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+    )}
+
+    <Card>
+      <div class="relative w-full overflow-auto">
+        <table class="w-full caption-bottom text-sm">
+          <thead class="[&_tr]:border-b">
+            <tr class="border-b transition-colors hover:bg-muted/50">
+              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">名称</th>
+              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">服务 / 账号</th>
+              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">配置</th>
+              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">分配</th>
+              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">更新时间</th>
+              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">操作</th>
+            </tr>
+          </thead>
+          <tbody class="[&_tr:last-child]:border-0">
+            {entries.length === 0 ? (
+              <tr>
+                <td colspan="6" class="p-8 text-center text-muted-foreground">暂无 2FA 条目</td>
+              </tr>
+            ) : (
+              entries.map((entry) => {
+                const assignedUsers = assignmentMap[entry.id] || []
+                return (
+                  <tr class="border-b transition-colors hover:bg-muted/50">
+                    <td class="p-4 align-middle">
+                      <div class="font-medium">{entry.name}</div>
+                      {entry.note && <div class="mt-1 text-xs text-muted-foreground">{entry.note}</div>}
+                    </td>
+                    <td class="p-4 align-middle">
+                      <div class="space-y-1">
+                        <div>{entry.issuer || "-"}</div>
+                        <div class="font-mono text-xs text-muted-foreground">{entry.accountName || "-"}</div>
+                      </div>
+                    </td>
+                    <td class="p-4 align-middle">
+                      <div class="flex flex-wrap gap-2">
+                        <Badge variant="outline">{entry.algorithm}</Badge>
+                        <Badge variant="secondary">{entry.digits} 位</Badge>
+                        <Badge variant="secondary">{entry.period}s</Badge>
+                      </div>
+                    </td>
+                    <td class="p-4 align-middle">
+                      <div class="space-y-2">
+                        <TwoFactorAssignmentManager
+                          client:load
+                          entryId={entry.id}
+                          entryName={entry.name}
+                          allUsers={users}
+                          assignedUsers={assignedUsers}
+                        />
+                        {assignedUsers.length > 0 && (
+                          <div class="flex flex-wrap gap-1">
+                            {assignedUsers.slice(0, 3).map((user) => (
+                              <Badge variant="outline" className="text-[10px]">{user.userName}</Badge>
+                            ))}
+                            {assignedUsers.length > 3 && (
+                              <Badge variant="outline" className="text-[10px]">+{assignedUsers.length - 3}</Badge>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </td>
+                    <td class="p-4 align-middle text-muted-foreground">{formatDate(entry.updatedAt)}</td>
+                    <td class="p-4 align-middle">
+                      <div class="flex gap-2">
+                        <a href={`/admin/two-factor?action=edit&id=${entry.id}`} title="编辑">
+                          <Button variant="ghost" size="icon" className="h-8 w-8">
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                        </a>
+                        <form method="POST" class="inline" onsubmit="return confirm('确定删除这个 2FA 条目吗？')">
+                          <input type="hidden" name="action" value="delete" />
+                          <input type="hidden" name="id" value={entry.id} />
+                          <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" title="删除">
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </form>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  </div>
+</AdminLayout>

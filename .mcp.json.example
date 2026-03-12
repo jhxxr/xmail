@@ -1,0 +1,16 @@
+{
+  "$schema": "https://github.com/modelcontextprotocol/servers/raw/main/schema/mcp.schema.json",
+  "mcpServers": {
+    "xmail": {
+      "type": "http",
+      "url": "https://m.xinr.de/api/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_API_KEY_HERE"
+      },
+      "metadata": {
+        "description": "XMail email management and verification code automation",
+        "homepage": "https://m.xinr.de"
+      }
+    }
+  }
+}

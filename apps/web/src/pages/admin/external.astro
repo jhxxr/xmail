@@ -1,0 +1,513 @@
+---
+import AdminLayout from "../../layouts/AdminLayout.astro"
+import { createDB, listExternalProviders, listExternalAccounts, createExternalProvider, createExternalAccount, deleteExternalProvider, deleteExternalAccount, listMailboxes, getExternalAccountUsers, assignExternalAccountToUser, unassignExternalAccountFromUser, listUsers, updateExternalProvider, updateExternalAccount, addServiceToExternalAccount, removeServiceFromExternalAccount, listServiceTemplates, getExternalAccountServicesWithDetails } from "database"
+import { verifyToken } from "../../lib/auth"
+import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
+import { Button } from "../../components/ui/button"
+import { Input } from "../../components/ui/input"
+import { Badge } from "../../components/ui/badge"
+import { Plus, Trash2, Users, Mail, Edit } from "lucide-react"
+import { nanoid } from "nanoid"
+import { encryptPassword } from "../../lib/utils"
+import { ExternalServiceManager } from "../../components/admin/ExternalServiceManager"
+
+const db = createDB(Astro.locals.runtime.env.DB)
+const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
+const encryptionKey = Astro.locals.runtime.env.ENCRYPTION_KEY || "default-key-please-change"
+
+let adminId: string | null = null
+const token = Astro.cookies.get("admin_token")?.value
+if (token) {
+  const payload = await verifyToken(token, jwtSecret)
+  if (payload?.type === "admin") {
+    adminId = payload.id
+  }
+}
+
+if (!adminId) {
+  return Astro.redirect("/admin/login")
+}
+
+let message = ""
+let error = ""
+
+// 处理表单提交
+if (Astro.request.method === "POST") {
+  const formData = await Astro.request.formData()
+  const action = formData.get("action")?.toString()
+
+  try {
+    if (action === "create_provider") {
+      const name = formData.get("name")?.toString()
+      const loginUrl = formData.get("loginUrl")?.toString()
+      const note = formData.get("note")?.toString()
+
+      if (name && loginUrl) {
+        await createExternalProvider(db, {
+          id: nanoid(),
+          name,
+          loginUrl,
+          icon: null,
+          note: note || null,
+          createdAt: Math.floor(Date.now() / 1000),
+        })
+        message = "提供商创建成功"
+      }
+    } else if (action === "update_provider") {
+      const providerId = formData.get("providerId")?.toString()
+      const name = formData.get("name")?.toString()
+      const loginUrl = formData.get("loginUrl")?.toString()
+      const note = formData.get("note")?.toString()
+
+      if (providerId && name && loginUrl) {
+        await updateExternalProvider(db, providerId, {
+          name,
+          loginUrl,
+          note: note || null,
+        })
+        message = "提供商更新成功"
+      }
+    } else if (action === "delete_provider") {
+      const providerId = formData.get("providerId")?.toString()
+      if (providerId) {
+        await deleteExternalProvider(db, providerId)
+        message = "提供商已删除"
+      }
+    } else if (action === "create_account") {
+      const providerId = formData.get("providerId")?.toString()
+      const email = formData.get("email")?.toString()
+      const password = formData.get("password")?.toString()
+      const linkedMailbox = formData.get("linkedMailbox")?.toString()
+      const note = formData.get("note")?.toString()
+
+      if (providerId && email && password) {
+        const encryptedPassword = encryptPassword(password, encryptionKey)
+        await createExternalAccount(db, {
+          id: nanoid(),
+          providerId,
+          email,
+          encryptedPassword,
+          linkedMailboxAddress: linkedMailbox || null,
+          note: note || null,
+          createdAt: Math.floor(Date.now() / 1000),
+          updatedAt: Math.floor(Date.now() / 1000),
+        })
+        message = "账号创建成功"
+      }
+    } else if (action === "update_account") {
+      const accountId = formData.get("accountId")?.toString()
+      const email = formData.get("email")?.toString()
+      const password = formData.get("password")?.toString()
+      const linkedMailbox = formData.get("linkedMailbox")?.toString()
+      const note = formData.get("note")?.toString()
+
+      if (accountId && email) {
+        const updateData: any = {
+          email,
+          linkedMailboxAddress: linkedMailbox || null,
+          note: note || null,
+          updatedAt: Math.floor(Date.now() / 1000),
+        }
+
+        // 如果提供了新密码，则更新密码
+        if (password) {
+          updateData.encryptedPassword = encryptPassword(password, encryptionKey)
+        }
+
+        await updateExternalAccount(db, accountId, updateData)
+        message = "账号更新成功"
+      }
+    } else if (action === "delete_account") {
+      const accountId = formData.get("accountId")?.toString()
+      if (accountId) {
+        await deleteExternalAccount(db, accountId)
+        message = "账号已删除"
+      }
+    } else if (action === "assign_users") {
+      const accountId = formData.get("accountId")?.toString()
+      const userIds = formData.getAll("userIds").map(id => id.toString())
+
+      if (accountId) {
+        // 获取当前已分配的用户
+        const currentUsers = await getExternalAccountUsers(db, accountId)
+        const currentUserIds = currentUsers.map(u => u.id)
+
+        // 移除不再选中的用户
+        for (const userId of currentUserIds) {
+          if (!userIds.includes(userId)) {
+            await unassignExternalAccountFromUser(db, userId, accountId)
+          }
+        }
+
+        // 添加新选中的用户
+        for (const userId of userIds) {
+          if (!currentUserIds.includes(userId)) {
+            await assignExternalAccountToUser(db, userId, accountId)
+          }
+        }
+
+        message = "用户分配已更新"
+      }
+    } else if (action === "add_external_template_service") {
+      const accountId = formData.get("accountId")?.toString()
+      const templateId = formData.get("template_id")?.toString()
+      if (accountId && templateId) {
+        await addServiceToExternalAccount(db, {
+          id: nanoid(),
+          accountId,
+          templateId,
+          customName: null,
+          customLoginUrl: null,
+          customNote: null,
+          createdAt: Math.floor(Date.now() / 1000),
+        })
+        message = "服务已关联"
+      }
+    } else if (action === "add_external_custom_service") {
+      const accountId = formData.get("accountId")?.toString()
+      const name = formData.get("service_name")?.toString()?.trim()
+      const loginUrl = formData.get("service_login_url")?.toString()?.trim()
+      const note = formData.get("service_note")?.toString()?.trim()
+      if (accountId && name && loginUrl) {
+        await addServiceToExternalAccount(db, {
+          id: nanoid(),
+          accountId,
+          templateId: null,
+          customName: name,
+          customLoginUrl: loginUrl,
+          customNote: note || null,
+          createdAt: Math.floor(Date.now() / 1000),
+        })
+        message = `临时服务 ${name} 已添加`
+      }
+    } else if (action === "delete_external_service") {
+      const serviceId = formData.get("service_id")?.toString()
+      if (serviceId) {
+        await removeServiceFromExternalAccount(db, serviceId)
+        message = "服务已删除"
+      }
+    }
+  } catch (e) {
+    error = e instanceof Error ? e.message : "操作失败"
+  }
+}
+
+// 获取数据
+const providers = await listExternalProviders(db)
+const allAccounts = await listExternalAccounts(db)
+const mailboxes = await listMailboxes(db, { limit: 1000 })
+const users = await listUsers(db, { limit: 1000 })
+const serviceTemplates = await listServiceTemplates(db)
+const accountServicesEntries = await Promise.all(
+  allAccounts.map(async (account) => {
+    const services = await getExternalAccountServicesWithDetails(db, account.id)
+    return [account.id, services] as const
+  })
+)
+const accountServicesMap = Object.fromEntries(accountServicesEntries) as Record<string, Awaited<ReturnType<typeof getExternalAccountServicesWithDetails>>>
+
+// 按提供商分组账号
+const accountsByProvider = new Map<string, typeof allAccounts>()
+for (const provider of providers) {
+  accountsByProvider.set(provider.id, allAccounts.filter(a => a.providerId === provider.id))
+}
+---
+
+<AdminLayout title="第三方邮箱管理">
+  <div class="space-y-6">
+    {message && (
+      <div class="bg-green-50 text-green-900 px-4 py-3 rounded-md border border-green-200">
+        {message}
+      </div>
+    )}
+    {error && (
+      <div class="bg-destructive/15 text-destructive px-4 py-3 rounded-md border border-destructive/50">
+        {error}
+      </div>
+    )}
+
+    <!-- 创建提供商 -->
+    <Card>
+      <CardHeader>
+        <CardTitle>添加第三方邮箱提供商</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <form method="POST" class="space-y-4">
+          <input type="hidden" name="action" value="create_provider" />
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label class="text-sm font-medium">提供商名称</label>
+              <Input type="text" name="name" required placeholder="例如：Gmail, Outlook" />
+            </div>
+            <div>
+              <label class="text-sm font-medium">登录 URL</label>
+              <Input type="url" name="loginUrl" required placeholder="https://..." />
+            </div>
+            <div>
+              <label class="text-sm font-medium">备注（可选）</label>
+              <Input type="text" name="note" placeholder="备注信息" />
+            </div>
+          </div>
+          <button type="submit" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-primary text-primary-foreground hover:bg-primary/90 h-10 px-4 py-2">
+            <Plus className="h-4 w-4 mr-2" />
+            添加提供商
+          </button>
+        </form>
+      </CardContent>
+    </Card>
+
+    <!-- 提供商列表 -->
+    {providers.map((provider) => (
+      <Card>
+        <CardHeader>
+          <div class="flex items-center justify-between">
+            <div>
+              <CardTitle>{provider.name}</CardTitle>
+              <p class="text-sm text-muted-foreground mt-1">{provider.loginUrl}</p>
+              {provider.note && <p class="text-xs text-muted-foreground mt-1">{provider.note}</p>}
+            </div>
+            <div class="flex items-center gap-2">
+              <button
+                type="button"
+                class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent h-8 w-8"
+                onclick={`document.getElementById('edit-provider-${provider.id}').showModal()`}
+              >
+                <Edit className="h-4 w-4" />
+              </button>
+              <form method="POST">
+                <input type="hidden" name="action" value="delete_provider" />
+                <input type="hidden" name="providerId" value={provider.id} />
+                <button type="submit" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-destructive/10 text-destructive h-8 w-8">
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </form>
+            </div>
+          </div>
+        </CardHeader>
+
+        <!-- 编辑提供商弹窗 -->
+        <dialog id={`edit-provider-${provider.id}`} class="rounded-lg p-6 backdrop:bg-black/50 min-w-[500px] fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 m-0">
+          <form method="POST">
+            <input type="hidden" name="action" value="update_provider" />
+            <input type="hidden" name="providerId" value={provider.id} />
+            <h3 class="text-lg font-semibold mb-4">编辑提供商</h3>
+            <div class="space-y-4 mb-4">
+              <div>
+                <label class="text-sm font-medium">提供商名称</label>
+                <Input type="text" name="name" required value={provider.name} />
+              </div>
+              <div>
+                <label class="text-sm font-medium">登录 URL</label>
+                <Input type="url" name="loginUrl" required value={provider.loginUrl} />
+              </div>
+              <div>
+                <label class="text-sm font-medium">备注（可选）</label>
+                <Input type="text" name="note" value={provider.note || ""} />
+              </div>
+            </div>
+            <div class="flex gap-2">
+              <button type="submit" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-primary text-primary-foreground hover:bg-primary/90 h-9 px-4">
+                保存
+              </button>
+              <button
+                type="button"
+                onclick={`document.getElementById('edit-provider-${provider.id}').close()`}
+                class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors border border-input bg-background hover:bg-accent h-9 px-4"
+              >
+                取消
+              </button>
+            </div>
+          </form>
+        </dialog>
+        <CardContent class="space-y-4">
+          <!-- 添加账号表单 -->
+          <form method="POST" class="border-t pt-4">
+            <input type="hidden" name="action" value="create_account" />
+            <input type="hidden" name="providerId" value={provider.id} />
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+              <div>
+                <label class="text-sm font-medium">邮箱地址</label>
+                <Input type="email" name="email" required placeholder="user@example.com" />
+              </div>
+              <div>
+                <label class="text-sm font-medium">密码</label>
+                <Input type="password" name="password" required placeholder="密码" />
+              </div>
+              <div>
+                <label class="text-sm font-medium">辅助邮箱（可选）</label>
+                <select name="linkedMailbox" class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+                  <option value="">无</option>
+                  {mailboxes.filter(m => m.isActive).map(m => (
+                    <option value={m.address}>{m.address}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label class="text-sm font-medium">备注（可选）</label>
+                <Input type="text" name="note" placeholder="备注" />
+              </div>
+            </div>
+            <button type="submit" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-primary text-primary-foreground hover:bg-primary/90 h-9 px-3">
+              <Plus className="h-4 w-4 mr-2" />
+              添加账号
+            </button>
+          </form>
+
+          <!-- 账号列表 -->
+          {accountsByProvider.get(provider.id)?.length ? (
+            <div class="space-y-2">
+              {accountsByProvider.get(provider.id)!.map((account) => (
+                <div class="flex items-center justify-between p-3 border rounded-md">
+                  <div class="flex-1">
+                    <div class="flex items-center gap-2">
+                      <Mail className="h-4 w-4 text-muted-foreground" />
+                      <span class="font-mono text-sm">{account.email}</span>
+                      {account.linkedMailboxAddress && (
+                        <Badge variant="outline" className="text-xs">
+                          辅助: {account.linkedMailboxAddress}
+                        </Badge>
+                      )}
+                    </div>
+                    {account.note && (
+                      <p class="text-xs text-muted-foreground mt-1 ml-6">{account.note}</p>
+                    )}
+                    <div class="mt-2 ml-6">
+                      <ExternalServiceManager
+                        client:load
+                        accountId={account.id}
+                        accountLabel={account.email}
+                        initialServices={accountServicesMap[account.id] || []}
+                        templates={serviceTemplates}
+                      />
+                    </div>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <button
+                      type="button"
+                      class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent h-8 w-8"
+                      onclick={`document.getElementById('edit-account-${account.id}').showModal()`}
+                      title="编辑账号"
+                    >
+                      <Edit className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent h-8 px-3"
+                      onclick={`document.getElementById('assign-modal-${account.id}').showModal()`}
+                    >
+                      <Users className="h-4 w-4 mr-1" />
+                      分配用户
+                    </button>
+                    <form method="POST" class="inline">
+                      <input type="hidden" name="action" value="delete_account" />
+                      <input type="hidden" name="accountId" value={account.id} />
+                      <button type="submit" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-destructive/10 text-destructive h-8 w-8">
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </form>
+                  </div>
+
+                  <!-- 编辑账号弹窗 -->
+                  <dialog id={`edit-account-${account.id}`} class="rounded-lg p-6 backdrop:bg-black/50 min-w-[500px] fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 m-0">
+                    <form method="POST">
+                      <input type="hidden" name="action" value="update_account" />
+                      <input type="hidden" name="accountId" value={account.id} />
+                      <h3 class="text-lg font-semibold mb-4">编辑账号</h3>
+                      <div class="space-y-4 mb-4">
+                        <div>
+                          <label class="text-sm font-medium">邮箱地址</label>
+                          <Input type="email" name="email" required value={account.email} />
+                        </div>
+                        <div>
+                          <label class="text-sm font-medium">密码（留空则不修改）</label>
+                          <Input type="password" name="password" placeholder="留空则不修改密码" />
+                        </div>
+                        <div>
+                          <label class="text-sm font-medium">辅助邮箱（可选）</label>
+                          <select name="linkedMailbox" class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+                            <option value="">无</option>
+                            {mailboxes.filter(m => m.isActive).map(m => (
+                              <option value={m.address} selected={m.address === account.linkedMailboxAddress}>
+                                {m.address}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label class="text-sm font-medium">备注（可选）</label>
+                          <Input type="text" name="note" value={account.note || ""} />
+                        </div>
+                      </div>
+                      <div class="flex gap-2">
+                        <button type="submit" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-primary text-primary-foreground hover:bg-primary/90 h-9 px-4">
+                          保存
+                        </button>
+                        <button
+                          type="button"
+                          onclick={`document.getElementById('edit-account-${account.id}').close()`}
+                          class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors border border-input bg-background hover:bg-accent h-9 px-4"
+                        >
+                          取消
+                        </button>
+                      </div>
+                    </form>
+                  </dialog>
+
+                  <!-- 分配用户弹窗 -->
+                  <dialog id={`assign-modal-${account.id}`} class="rounded-lg p-6 backdrop:bg-black/50 fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 m-0 min-w-[400px]">
+                    <form method="POST">
+                      <input type="hidden" name="action" value="assign_users" />
+                      <input type="hidden" name="accountId" value={account.id} />
+                      <h3 class="text-lg font-semibold mb-4">分配用户 - {account.email}</h3>
+                      <div class="space-y-2 max-h-96 overflow-y-auto mb-4">
+                        {users.map(async (user) => {
+                          const assignedUsers = await getExternalAccountUsers(db, account.id)
+                          const isAssigned = assignedUsers.some(u => u.id === user.id)
+                          return (
+                            <label class="flex items-center gap-2 p-2 hover:bg-accent rounded cursor-pointer">
+                              <input
+                                type="checkbox"
+                                name="userIds"
+                                value={user.id}
+                                checked={isAssigned}
+                                class="h-4 w-4"
+                              />
+                              <span class="flex-1">{user.name || user.token}</span>
+                            </label>
+                          )
+                        })}
+                      </div>
+                      <div class="flex gap-2">
+                        <button type="submit" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-primary text-primary-foreground hover:bg-primary/90 h-9 px-4">
+                          保存
+                        </button>
+                        <button
+                          type="button"
+                          onclick={`document.getElementById('assign-modal-${account.id}').close()`}
+                          class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors border border-input bg-background hover:bg-accent h-9 px-4"
+                        >
+                          取消
+                        </button>
+                      </div>
+                    </form>
+                  </dialog>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p class="text-sm text-muted-foreground text-center py-4">暂无账号</p>
+          )}
+        </CardContent>
+      </Card>
+    ))}
+
+    {providers.length === 0 && (
+      <Card>
+        <CardContent class="flex flex-col items-center justify-center py-12">
+          <Mail className="h-12 w-12 text-muted-foreground mb-4" />
+          <p class="text-muted-foreground">还没有添加任何第三方邮箱提供商</p>
+        </CardContent>
+      </Card>
+    )}
+  </div>
+</AdminLayout>

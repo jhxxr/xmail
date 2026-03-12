@@ -1,0 +1,310 @@
+---
+import AdminLayout from "../../layouts/AdminLayout.astro"
+import { createDB, getAdminById, listUsers, createUser, deleteUser, updateUser, createLog, listMailboxes, getUserById } from "database"
+import { verifyToken } from "../../lib/auth"
+import { formatDate } from "../../lib/utils"
+import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
+import { Button } from "../../components/ui/button"
+import { Input } from "../../components/ui/input"
+import { Badge } from "../../components/ui/badge"
+import { Copy, Trash2, UserPlus, Power, ExternalLink, Pencil, Mail } from "lucide-react"
+
+const db = createDB(Astro.locals.runtime.env.DB)
+const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
+
+// 验证登录
+const token = Astro.cookies.get("admin_token")?.value
+if (!token) return Astro.redirect("/admin/login")
+const payload = await verifyToken(token, jwtSecret)
+if (!payload || payload.type !== "admin") return Astro.redirect("/admin/login")
+const admin = await getAdminById(db, payload.id)
+if (!admin) return Astro.redirect("/admin/login")
+
+let message = ""
+let messageType: "success" | "error" = "success"
+let newToken = ""
+
+// 处理表单
+if (Astro.request.method === "POST") {
+  const formData = await Astro.request.formData()
+  const action = formData.get("action")?.toString()
+
+  if (action === "create") {
+    const name = formData.get("name")?.toString()?.trim()
+    const note = formData.get("note")?.toString()?.trim()
+    const user = await createUser(db, { name, note })
+    newToken = user.token
+    await createLog(db, { adminId: admin.id, action: "create_user", target: user.id, details: { name, note } })
+    message = `用户创建成功`
+    messageType = "success"
+  } else if (action === "delete") {
+    const id = formData.get("id")?.toString()
+    if (id) {
+      await deleteUser(db, id)
+      await createLog(db, { adminId: admin.id, action: "delete_user", target: id })
+      message = "用户已删除"
+    }
+  } else if (action === "toggle") {
+    const id = formData.get("id")?.toString()
+    const isActive = formData.get("is_active") === "true"
+    if (id) {
+      await updateUser(db, id, { isActive: !isActive })
+      await createLog(db, { adminId: admin.id, action: isActive ? "disable_user" : "enable_user", target: id })
+      message = `用户已${isActive ? "禁用" : "启用"}`
+    }
+  } else if (action === "edit") {
+    const id = formData.get("id")?.toString()
+    const name = formData.get("name")?.toString()?.trim()
+    const note = formData.get("note")?.toString()?.trim()
+    if (id) {
+      await updateUser(db, id, { name, note })
+      await createLog(db, { adminId: admin.id, action: "update_user", target: id, details: { name, note } })
+      return Astro.redirect("/admin/users?msg=updated")
+    }
+  }
+}
+
+const users = await listUsers(db, { limit: 100 })
+
+// 处理编辑模式
+const urlAction = Astro.url.searchParams.get("action")
+const editId = Astro.url.searchParams.get("id")
+let editUser = null
+if (urlAction === "edit" && editId) {
+  editUser = await getUserById(db, editId)
+}
+const showCreateForm = urlAction === "create"
+const showEditForm = urlAction === "edit" && !!editUser
+
+// 处理重定向后的消息
+if (Astro.url.searchParams.get("msg") === "updated") {
+  message = "用户更新成功"
+  messageType = "success"
+}
+
+// 获取每个用户的邮箱数量
+const userMailboxCounts: Record<string, number> = {}
+for (const user of users) {
+  const mailboxes = await listMailboxes(db, { userId: user.id, limit: 1000 })
+  userMailboxCounts[user.id] = mailboxes.length
+}
+---
+
+<AdminLayout title="用户管理">
+  <div class="space-y-6">
+    <div class="flex justify-between items-center">
+      <h1 class="text-3xl font-bold tracking-tight">用户管理</h1>
+      <a href={(showCreateForm || showEditForm) ? "/admin/users" : "/admin/users?action=create"}>
+        <Button>
+          {(showCreateForm || showEditForm) ? "返回列表" : <><UserPlus className="mr-2 h-4 w-4" /> 创建用户</>}
+        </Button>
+      </a>
+    </div>
+
+    {message && (
+      <div class={`p-4 rounded-md border ${messageType === "success" ? "bg-green-50 text-green-900 border-green-200" : "bg-red-50 text-red-900 border-red-200"}`}>
+        {message}
+        {newToken && (
+          <div class="mt-2">
+            <p class="text-sm mb-1 font-medium">用户 Token（请保存，仅显示一次）：</p>
+            <div class="p-2 bg-white rounded border font-mono text-sm break-all select-all">{newToken}</div>
+            <p class="text-sm mt-2">访问链接: <code class="bg-muted px-1 rounded">/?key={newToken}</code></p>
+          </div>
+        )}
+      </div>
+    )}
+
+    {showCreateForm && !newToken && (
+      <Card>
+        <CardHeader>
+          <CardTitle>创建新用户</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form method="POST" class="space-y-4 max-w-lg">
+            <input type="hidden" name="action" value="create" />
+            <div class="space-y-2">
+              <label class="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">用户名称</label>
+              <Input type="text" name="name" placeholder="例如: 张三" />
+            </div>
+            <div class="space-y-2">
+              <label class="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">备注</label>
+              <Input type="text" name="note" placeholder="例如: 朋友" />
+            </div>
+            <Button type="submit">创建用户</Button>
+          </form>
+        </CardContent>
+      </Card>
+    )}
+
+    {showEditForm && editUser && (
+      <Card>
+        <CardHeader>
+          <CardTitle>编辑用户</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form method="POST" class="space-y-4 max-w-lg">
+            <input type="hidden" name="action" value="edit" />
+            <input type="hidden" name="id" value={editUser.id} />
+            <div class="space-y-2">
+              <label class="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">用户名称</label>
+              <Input type="text" name="name" value={editUser.name || ""} placeholder="例如: 张三" />
+            </div>
+            <div class="space-y-2">
+              <label class="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">备注</label>
+              <Input type="text" name="note" value={editUser.note || ""} placeholder="例如: 朋友" />
+            </div>
+            <div class="flex gap-2">
+              <Button type="submit">保存更改</Button>
+              <a href="/admin/users">
+                <Button type="button" variant="outline">取消</Button>
+              </a>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+    )}
+
+    <Card>
+      <div class="relative w-full overflow-auto">
+        <table class="w-full caption-bottom text-sm">
+          <thead class="[&_tr]:border-b">
+            <tr class="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted">
+              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">名称</th>
+              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">Token</th>
+              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">快速登录</th>
+              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">备注</th>
+              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">邮箱数</th>
+              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">状态</th>
+              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">创建时间</th>
+              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">操作</th>
+            </tr>
+          </thead>
+          <tbody class="[&_tr:last-child]:border-0">
+            {users.length === 0 ? (
+              <tr><td colspan="8" class="p-4 text-center text-muted-foreground">暂无用户</td></tr>
+            ) : (
+              users.map((user) => (
+                <tr class={`border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted ${!user.isActive ? "opacity-60" : ""}`}>
+                  <td class="p-4 align-middle font-medium">{user.name || "-"}</td>
+                  <td class="p-4 align-middle">
+                    <div class="flex items-center gap-2">
+                      <code class="relative rounded bg-muted px-[0.3rem] py-[0.2rem] font-mono text-xs font-semibold">{user.token.slice(0, 8)}...</code>
+                      <button
+                        type="button"
+                        class="copy-btn inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 hover:bg-accent hover:text-accent-foreground h-8 w-8"
+                        data-token={user.token}
+                        title="复制 Token"
+                      >
+                        <Copy className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </td>
+                  <td class="p-4 align-middle">
+                    <button
+                      type="button"
+                      class="copy-login-link-btn inline-flex items-center gap-1.5 rounded-md text-xs font-medium transition-colors hover:bg-accent hover:text-accent-foreground px-2.5 py-1.5 border"
+                      data-token={user.token}
+                      title="复制快速登录链接"
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                      <span>复制链接</span>
+                    </button>
+                  </td>
+                  <td class="p-4 align-middle text-muted-foreground">{user.note || "-"}</td>
+                  <td class="p-4 align-middle">
+                    <span class="text-muted-foreground font-medium">
+                      {userMailboxCounts[user.id] || 0} 个
+                    </span>
+                  </td>
+                  <td class="p-4 align-middle">
+                    {user.isActive ? (
+                      <Badge variant="success">活跃</Badge>
+                    ) : (
+                      <Badge variant="secondary">已禁用</Badge>
+                    )}
+                  </td>
+                  <td class="p-4 align-middle text-muted-foreground">{formatDate(user.createdAt)}</td>
+                  <td class="p-4 align-middle">
+                    <div class="flex gap-2">
+                      <a href={`/admin/users?action=edit&id=${user.id}`} title="编辑用户">
+                        <Button variant="ghost" size="icon" className="h-8 w-8">
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                      </a>
+                      <form method="POST" class="inline">
+                        <input type="hidden" name="action" value="toggle" />
+                        <input type="hidden" name="id" value={user.id} />
+                        <input type="hidden" name="is_active" value={String(user.isActive)} />
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-orange-500 hover:text-orange-600" title={user.isActive ? "禁用" : "启用"}>
+                          <Power className="h-4 w-4" />
+                        </Button>
+                      </form>
+                      <form method="POST" class="inline" onsubmit="return confirm('确定删除此用户？其邮箱将变为未分配状态。')">
+                        <input type="hidden" name="action" value="delete" />
+                        <input type="hidden" name="id" value={user.id} />
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" title="删除">
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </form>
+                    </div>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  </div>
+</AdminLayout>
+
+<script>
+  // 复制 Token
+  document.querySelectorAll('.copy-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const token = btn.getAttribute('data-token')
+      if (token) {
+        try {
+          await navigator.clipboard.writeText(token)
+          const icon = btn.querySelector('svg')
+          if (icon) {
+            icon.classList.add('text-green-600')
+            setTimeout(() => icon.classList.remove('text-green-600'), 1000)
+          }
+        } catch (err) {
+          console.error('复制失败:', err)
+        }
+      }
+    })
+  })
+
+  // 复制快速登录链接
+  document.querySelectorAll('.copy-login-link-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const token = btn.getAttribute('data-token')
+      if (token) {
+        try {
+          // 构建完整的登录URL
+          const loginUrl = `${window.location.origin}/?key=${token}`
+          await navigator.clipboard.writeText(loginUrl)
+
+          // 视觉反馈
+          const span = btn.querySelector('span')
+          const originalText = span?.textContent
+          const originalClass = btn.className
+
+          btn.classList.remove('border')
+          btn.classList.add('bg-green-600', 'text-white')
+          if (span) span.textContent = '已复制'
+
+          setTimeout(() => {
+            btn.className = originalClass
+            if (span && originalText) span.textContent = originalText
+          }, 2000)
+        } catch (err) {
+          console.error('复制失败:', err)
+        }
+      }
+    })
+  })
+</script>

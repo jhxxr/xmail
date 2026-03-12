@@ -1,0 +1,193 @@
+---
+import AdminLayout from "../../layouts/AdminLayout.astro"
+import { createDB, getAdminById, listApiKeys, createApiKey, revokeApiKey, deleteApiKey, createLog } from "database"
+import { verifyToken } from "../../lib/auth"
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../../components/ui/card"
+import { Button } from "../../components/ui/button"
+import { Input } from "../../components/ui/input"
+import { Badge } from "../../components/ui/badge"
+import { Key, Trash2, Plus, Ban, Copy, Check } from "lucide-react"
+
+const db = createDB(Astro.locals.runtime.env.DB)
+const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
+
+const token = Astro.cookies.get("admin_token")?.value
+if (!token) return Astro.redirect("/admin/login")
+const payload = await verifyToken(token, jwtSecret)
+if (!payload || payload.type !== "admin") return Astro.redirect("/admin/login")
+const admin = await getAdminById(db, payload.id)
+if (!admin) return Astro.redirect("/admin/login")
+
+let message = ""
+let messageType: "success" | "error" = "success"
+let newKeyRaw = ""
+
+if (Astro.request.method === "POST") {
+  const formData = await Astro.request.formData()
+  const action = formData.get("action")?.toString()
+
+  if (action === "create") {
+    const name = formData.get("name")?.toString()?.trim()
+    if (name) {
+      try {
+        const result = await createApiKey(db, name)
+        newKeyRaw = result.fullKey
+        await createLog(db, { adminId: admin.id, action: "create_api_key", target: name })
+        message = `API Key "${name}" 创建成功`
+      } catch (e) {
+        console.error("创建 API Key 失败:", e)
+        message = `创建失败: ${e instanceof Error ? e.message : String(e)}`
+        messageType = "error"
+      }
+    }
+  } else if (action === "revoke") {
+    const id = formData.get("id")?.toString()
+    if (id) {
+      await revokeApiKey(db, id)
+      await createLog(db, { adminId: admin.id, action: "revoke_api_key", target: id })
+      message = "API Key 已撤销"
+    }
+  } else if (action === "delete") {
+    const id = formData.get("id")?.toString()
+    if (id) {
+      await deleteApiKey(db, id)
+      await createLog(db, { adminId: admin.id, action: "delete_api_key", target: id })
+      message = "API Key 已删除"
+    }
+  }
+}
+
+const apiKeys = await listApiKeys(db)
+
+function formatDate(ts: number) {
+  return new Date(ts * 1000).toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  })
+}
+---
+
+<AdminLayout title="API Key 管理">
+  <div class="space-y-6">
+    <h1 class="text-3xl font-bold tracking-tight">API Key 管理</h1>
+
+    {message && !newKeyRaw && (
+      <div class={`p-4 rounded-md border ${messageType === "success" ? "bg-green-50 text-green-900 border-green-200" : "bg-red-50 text-red-900 border-red-200"}`}>
+        {message}
+      </div>
+    )}
+
+    {newKeyRaw && (
+      <div class="p-6 rounded-lg border border-green-200 bg-green-50 space-y-4 shadow-sm">
+        <div class="flex items-center gap-2 text-green-800 font-semibold">
+          <Check className="h-5 w-5" />
+          API Key 创建成功
+        </div>
+        <p class="text-sm text-green-700">
+          请立即复制并保存此 Key。出于安全原因，它将不会再次显示。
+        </p>
+        <div class="flex gap-2 items-center">
+          <code class="flex-1 p-3 bg-white rounded border font-mono text-sm break-all select-all">
+            {newKeyRaw}
+          </code>
+          <button
+            type="button"
+            class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground h-10 w-10 border border-input bg-background"
+            onclick={`navigator.clipboard.writeText('${newKeyRaw}')`}
+            title="复制"
+          >
+            <Copy className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+    )}
+
+    <div class="grid gap-6 md:grid-cols-3">
+      <Card className="md:col-span-1 h-fit">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Plus className="h-5 w-5" />
+            新建 Key
+          </CardTitle>
+          <CardDescription>创建一个新的自动化访问密钥</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form method="POST" class="space-y-4">
+            <input type="hidden" name="action" value="create" />
+            <div class="space-y-2">
+              <label class="text-sm font-medium">名称 / 用途</label>
+              <Input name="name" placeholder="例如: GitHub Actions" required />
+            </div>
+            <button type="submit" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors bg-primary text-primary-foreground hover:bg-primary/90 h-10 px-4 py-2 w-full">
+              创建
+            </button>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Card className="md:col-span-2">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Key className="h-5 w-5" />
+            API Keys
+          </CardTitle>
+          <CardDescription>管理现有的 API 访问密钥</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {apiKeys.length === 0 ? (
+            <div class="text-center py-8 text-muted-foreground">
+              暂无 API Key
+            </div>
+          ) : (
+            <div class="space-y-4">
+              {apiKeys.map((key) => (
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-lg border bg-card text-card-foreground shadow-sm gap-4">
+                  <div class="space-y-1">
+                    <div class="flex items-center gap-2">
+                      <span class="font-semibold">{key.name}</span>
+                      {key.revokedAt ? (
+                        <Badge variant="destructive">已撤销</Badge>
+                      ) : (
+                        <Badge variant="secondary" className="bg-green-100 text-green-800 hover:bg-green-100">活跃</Badge>
+                      )}
+                    </div>
+                    <div class="text-xs text-muted-foreground font-mono">
+                      sk_live_{key.keyPrefix}...
+                    </div>
+                    <div class="text-xs text-muted-foreground flex gap-4">
+                      <span>创建于: {formatDate(key.createdAt)}</span>
+                      {key.lastUsedAt && <span>最后使用: {formatDate(key.lastUsedAt)}</span>}
+                    </div>
+                  </div>
+
+                  <div class="flex gap-2">
+                    {!key.revokedAt && (
+                      <form method="POST" onsubmit="return confirm('确定要撤销此 Key 吗？撤销后将无法恢复使用。')">
+                        <input type="hidden" name="action" value="revoke" />
+                        <input type="hidden" name="id" value={key.id} />
+                        <button type="submit" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors border border-input bg-background hover:bg-yellow-50 text-yellow-600 hover:text-yellow-700 h-9 px-3">
+                          <Ban className="h-4 w-4 mr-1" />
+                          撤销
+                        </button>
+                      </form>
+                    )}
+                    <form method="POST" onsubmit="return confirm('确定要删除此记录吗？')">
+                      <input type="hidden" name="action" value="delete" />
+                      <input type="hidden" name="id" value={key.id} />
+                      <button type="submit" class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-destructive/10 text-destructive h-9 w-9">
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  </div>
+</AdminLayout>

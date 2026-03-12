@@ -1,0 +1,16 @@
+name = "xmail"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+pages_build_output_dir = "./dist"
+
+[observability]
+enabled = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "xmail-db"
+database_id = "90dd129e-65d0-48b6-afa9-17a79e1f27cc"
+
+[vars]
+MAIL_DOMAIN = "m.xinr.de"  # 请在部署后修改为你的实际域名
+# JWT_SECRET 和 ADMIN_PASSWORD 应在 dashboard 中设置为 secrets

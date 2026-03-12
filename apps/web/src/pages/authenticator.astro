@@ -1,0 +1,93 @@
+---
+import Layout from "../layouts/Layout.astro"
+import { createDB, listTwoFactorEntriesForUser } from "database"
+import { verifyToken } from "../lib/auth"
+import ManualTotpGenerator from "../components/totp/ManualTotpGenerator"
+import AssignedTotpList from "../components/totp/AssignedTotpList"
+import { Button } from "../components/ui/button"
+import { ArrowLeft, LogOut, ShieldCheck } from "lucide-react"
+
+const db = createDB(Astro.locals.runtime.env.DB)
+const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
+
+const token = Astro.cookies.get("user_token")?.value
+if (!token) {
+  return Astro.redirect("/")
+}
+
+const payload = await verifyToken(token, jwtSecret)
+if (!payload || payload.type !== "user") {
+  return Astro.redirect("/")
+}
+
+const userId = payload.id !== "password" && payload.id !== "quick_access" ? payload.id : null
+const mailboxAddress = payload.mailbox || null
+const assignedEntries = userId ? await listTwoFactorEntriesForUser(db, userId) : []
+const assignedTotpEntries = assignedEntries.map((entry) => ({
+  id: entry.id,
+  name: entry.name,
+  issuer: entry.issuer,
+  accountName: entry.accountName,
+  secret: entry.secret,
+  digits: entry.digits,
+  period: entry.period,
+  algorithm: entry.algorithm,
+  note: entry.note,
+}))
+const backHref = userId ? "/mailboxes" : (mailboxAddress ? `/?mailbox=${encodeURIComponent(mailboxAddress)}` : "/")
+---
+
+<Layout title="2FA 工具">
+  <div class="min-h-screen bg-muted/30">
+    <header class="sticky top-0 z-10 border-b bg-background">
+      <div class="container mx-auto flex h-16 max-w-5xl items-center justify-between gap-4 px-4">
+        <div class="flex items-center gap-3">
+          <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
+            <ShieldCheck className="h-4 w-4" />
+          </div>
+          <div>
+            <h1 class="text-lg font-bold tracking-tight">2FA 工具</h1>
+            <p class="text-xs text-muted-foreground">输入密钥即可生成动态验证码</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <a href={backHref}>
+            <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-primary hover:bg-primary/10">
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              返回
+            </Button>
+          </a>
+          <a href="/logout">
+            <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive hover:bg-destructive/10">
+              <LogOut className="mr-2 h-4 w-4" />
+              退出
+            </Button>
+          </a>
+        </div>
+      </div>
+    </header>
+
+    <main class="container mx-auto max-w-5xl space-y-6 px-4 py-8">
+      <div class="rounded-2xl border bg-card p-5 shadow-sm">
+        <h2 class="text-base font-semibold">使用说明</h2>
+        <ul class="mt-2 space-y-1 text-sm text-muted-foreground">
+          <li>• 支持直接输入 Base32 密钥，或粘贴 `otpauth://` 链接。</li>
+          <li>• 如果管理员给你分配了 2FA，下方会直接显示可用验证码。</li>
+          <li>• 验证码在浏览器本地生成，不需要额外跳转到第三方网站。</li>
+        </ul>
+      </div>
+
+      <ManualTotpGenerator client:load />
+
+      <section class="space-y-4">
+        <div>
+          <h2 class="text-xl font-bold tracking-tight">我已分配的 2FA</h2>
+          <p class="mt-1 text-sm text-muted-foreground">
+            {userId ? "管理员分配给你的 2FA 会在这里自动生成当前验证码。" : "当前登录方式只支持临时生成，不显示管理员分配列表。"}
+          </p>
+        </div>
+        <AssignedTotpList client:load entries={assignedTotpEntries} />
+      </section>
+    </main>
+  </div>
+</Layout>
