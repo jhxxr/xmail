@@ -19,6 +19,7 @@
     "jose": "^6.1.0",
     "lucide-react": "^0.511.0",
     "nanoid": "^5.1.5",
+    "qr-scanner": "^1.4.2",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "tailwind-merge": "^3.3.1"

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Camera, Clipboard, ImageUp, QrCode, ScanLine, X } from "lucide-react"
 import { parseTotpInput } from "../../lib/totp"
 
@@ -15,14 +15,16 @@ interface QrImportPanelProps {
   submitButtonId?: string
 }
 
-type DetectorLike = {
-  detect: (source: CanvasImageSource) => Promise<Array<{ rawValue?: string }>>
-}
+type QrScannerModule = typeof import("qr-scanner")
+type QrScannerCtor = QrScannerModule["default"]
+type QrScannerInstance = InstanceType<QrScannerCtor>
 
-declare global {
-  interface Window {
-    BarcodeDetector?: new (options?: { formats?: string[] }) => DetectorLike
-  }
+let qrScannerModulePromise: Promise<QrScannerModule> | null = null
+
+async function getQrScanner(): Promise<QrScannerCtor> {
+  qrScannerModulePromise ??= import("qr-scanner")
+  const module = await qrScannerModulePromise
+  return module.default
 }
 
 function setFieldValue(fieldId: string | undefined, value: string | number | null | undefined) {
@@ -62,32 +64,42 @@ function triggerSubmit(props: QrImportPanelProps) {
   button?.click()
 }
 
-async function decodeFromImage(source: CanvasImageSource): Promise<string> {
-  if (!window.BarcodeDetector) {
-    throw new Error("当前浏览器不支持本地二维码识别，建议使用最新版 Chrome 或 Edge")
+function getScannerErrorMessage(cause: unknown, fallback: string): string {
+  if (cause instanceof DOMException) {
+    if (cause.name === "NotAllowedError") {
+      return "未获得摄像头权限，请允许浏览器访问摄像头后重试"
+    }
+    if (cause.name === "NotFoundError") {
+      return "未检测到可用摄像头"
+    }
+    if (cause.name === "NotReadableError") {
+      return "摄像头正被其他程序占用，请关闭后重试"
+    }
   }
 
-  const detector = new window.BarcodeDetector({ formats: ["qr_code"] })
-  const results = await detector.detect(source)
-  const value = results.find((result) => result.rawValue?.trim())?.rawValue?.trim()
-  if (!value) {
-    throw new Error("未识别到二维码，请换更清晰的图片再试")
+  const message =
+    typeof cause === "string"
+      ? cause.trim()
+      : cause instanceof Error
+        ? cause.message.trim()
+        : ""
+
+  if (!message) return fallback
+  if (message === "No QR code found") {
+    return "未识别到二维码，请换更清晰的图片再试"
   }
-  return value
+
+  return message
 }
 
-function readImageFile(file: File): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const image = new Image()
-      image.onload = () => resolve(image)
-      image.onerror = () => reject(new Error("图片读取失败"))
-      image.src = String(reader.result)
-    }
-    reader.onerror = () => reject(new Error("图片读取失败"))
-    reader.readAsDataURL(file)
-  })
+async function decodeImageFile(file: File): Promise<string> {
+  const QrScanner = await getQrScanner()
+  const result = await QrScanner.scanImage(file, { returnDetailedScanResult: true })
+  const rawValue = result.data.trim()
+  if (!rawValue) {
+    throw new Error("未识别到二维码，请换更清晰的图片再试")
+  }
+  return rawValue
 }
 
 export default function QrImportPanel(props: QrImportPanelProps) {
@@ -97,28 +109,43 @@ export default function QrImportPanel(props: QrImportPanelProps) {
   const [hasCamera, setHasCamera] = useState(false)
   const [isBusy, setIsBusy] = useState(false)
   const videoRef = useRef<HTMLVideoElement | null>(null)
-  const streamRef = useRef<MediaStream | null>(null)
-  const rafRef = useRef<number | null>(null)
+  const scannerRef = useRef<QrScannerInstance | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
-  const barcodeSupported = useMemo(() => typeof window !== "undefined" && Boolean(window.BarcodeDetector), [])
-
   const stopCamera = () => {
-    if (rafRef.current !== null) {
-      cancelAnimationFrame(rafRef.current)
-      rafRef.current = null
+    const scanner = scannerRef.current
+    scannerRef.current = null
+    if (scanner) {
+      scanner.stop()
+      scanner.destroy()
     }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop())
-      streamRef.current = null
+    if (videoRef.current) {
+      videoRef.current.srcObject = null
     }
     setIsScanning(false)
   }
 
   useEffect(() => {
-    if (!navigator.mediaDevices?.getUserMedia) return
-    setHasCamera(true)
-    return () => stopCamera()
+    let disposed = false
+
+    void (async () => {
+      try {
+        const QrScanner = await getQrScanner()
+        const supported = await QrScanner.hasCamera()
+        if (!disposed) {
+          setHasCamera(supported)
+        }
+      } catch {
+        if (!disposed) {
+          setHasCamera(false)
+        }
+      }
+    })()
+
+    return () => {
+      disposed = true
+      stopCamera()
+    }
   }, [])
 
   const handleDecodedValue = (rawValue: string) => {
@@ -134,17 +161,21 @@ export default function QrImportPanel(props: QrImportPanelProps) {
   const handleFile = async (file: File) => {
     setIsBusy(true)
     try {
-      const image = await readImageFile(file)
-      const rawValue = await decodeFromImage(image)
+      const rawValue = await decodeImageFile(file)
       handleDecodedValue(rawValue)
-    } catch (cause: any) {
-      setError(cause?.message || "二维码解析失败")
+    } catch (cause) {
+      setError(getScannerErrorMessage(cause, "二维码解析失败"))
     } finally {
       setIsBusy(false)
     }
   }
 
   const handlePaste = async () => {
+    if (!navigator.clipboard?.read) {
+      setError("当前浏览器不支持直接读取剪贴板，请聚焦面板后按 Ctrl+V，或改用图片上传")
+      return
+    }
+
     try {
       const items = await navigator.clipboard.read()
       const imageItem = items.find((item) => item.types.some((type) => type.startsWith("image/")))
@@ -159,48 +190,42 @@ export default function QrImportPanel(props: QrImportPanelProps) {
 
       const blob = await imageItem.getType(imageType)
       await handleFile(new File([blob], "clipboard-image", { type: imageType }))
-    } catch (cause: any) {
-      setError(cause?.message || "读取剪贴板失败，请改用上传图片")
-    }
-  }
-
-  const scanVideoFrame = async () => {
-    if (!videoRef.current) return
-    try {
-      const rawValue = await decodeFromImage(videoRef.current)
-      handleDecodedValue(rawValue)
-      stopCamera()
-      return
-    } catch {
-      rafRef.current = requestAnimationFrame(() => {
-        void scanVideoFrame()
-      })
+    } catch (cause) {
+      setError(getScannerErrorMessage(cause, "读取剪贴板失败，请改用图片上传"))
     }
   }
 
   const startCamera = async () => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setError("当前浏览器不支持摄像头扫码")
-      return
-    }
+    if (!videoRef.current) return
+    if (scannerRef.current) return
 
+    setIsBusy(true)
     try {
       setError("")
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" },
-        audio: false,
-      })
-      streamRef.current = stream
-      setIsScanning(true)
+      const QrScanner = await getQrScanner()
+      const scanner = new QrScanner(
+        videoRef.current,
+        (scanResult) => {
+          handleDecodedValue(scanResult.data)
+          stopCamera()
+        },
+        {
+          onDecodeError: () => {},
+          preferredCamera: "environment",
+          maxScansPerSecond: 12,
+          returnDetailedScanResult: true,
+        }
+      )
 
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        await videoRef.current.play()
-      }
-      void scanVideoFrame()
-    } catch (cause: any) {
-      setError(cause?.message || "无法打开摄像头")
+      scanner.setInversionMode("both")
+      scannerRef.current = scanner
+      await scanner.start()
+      setIsScanning(true)
+    } catch (cause) {
+      setError(getScannerErrorMessage(cause, "无法打开摄像头"))
       stopCamera()
+    } finally {
+      setIsBusy(false)
     }
   }
 
@@ -208,7 +233,12 @@ export default function QrImportPanel(props: QrImportPanelProps) {
     <div
       tabIndex={0}
       onPaste={(event) => {
-        const file = Array.from(event.clipboardData.files).find((item) => item.type.startsWith("image/"))
+        const imageItem = Array.from(event.clipboardData.items).find((item) => item.type.startsWith("image/"))
+        const file =
+          imageItem?.getAsFile() ??
+          Array.from(event.clipboardData.files).find((item) => item.type.startsWith("image/")) ??
+          null
+
         if (file) {
           event.preventDefault()
           void handleFile(file)
@@ -220,7 +250,9 @@ export default function QrImportPanel(props: QrImportPanelProps) {
         <QrCode className="h-4 w-4 text-primary" />
         <div>
           <div className="text-sm font-medium">二维码导入</div>
-          <div className="text-xs text-muted-foreground">图片只在当前浏览器本地解析，不会上传到服务器；支持 Ctrl+V 粘贴截图</div>
+          <div className="text-xs text-muted-foreground">
+            图片只在当前浏览器本地解析，不会上传到服务器；支持直接上传图片、点击读取剪贴板，或聚焦后按 Ctrl+V 粘贴截图
+          </div>
         </div>
       </div>
 
@@ -247,7 +279,8 @@ export default function QrImportPanel(props: QrImportPanelProps) {
           <button
             type="button"
             onClick={() => void (isScanning ? stopCamera() : startCamera())}
-            className="inline-flex h-9 items-center justify-center gap-2 rounded-md border bg-background px-3 text-sm font-medium transition-colors hover:bg-accent"
+            disabled={isBusy}
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-md border bg-background px-3 text-sm font-medium transition-colors hover:bg-accent disabled:opacity-50"
           >
             {isScanning ? <X className="h-4 w-4" /> : <Camera className="h-4 w-4" />}
             {isScanning ? "停止扫码" : "摄像头扫码"}
@@ -276,12 +309,6 @@ export default function QrImportPanel(props: QrImportPanelProps) {
             <ScanLine className="h-3.5 w-3.5" />
             将二维码放到画面中间，识别成功后会自动回填
           </div>
-        </div>
-      )}
-
-      {!barcodeSupported && (
-        <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-          当前浏览器不支持本地二维码解析，建议使用最新版 Chrome / Edge。
         </div>
       )}
 

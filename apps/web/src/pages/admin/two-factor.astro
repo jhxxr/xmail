@@ -20,7 +20,6 @@ import { TwoFactorAssignmentManager } from "../../components/admin/TwoFactorAssi
 import QrImportPanel from "../../components/totp/QrImportPanel"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
 import { Button } from "../../components/ui/button"
-import { Input } from "../../components/ui/input"
 import { Badge } from "../../components/ui/badge"
 import { Pencil, Plus, ShieldCheck, Trash2 } from "lucide-react"
 
@@ -42,21 +41,53 @@ function getOptionalText(formData: FormData, key: string): string | null {
   return value ? value : null
 }
 
+function isOtpAuthInput(input: string): boolean {
+  return input.trim().toLowerCase().startsWith("otpauth://")
+}
+
+function isDefaultTotpConfig(entry: { digits: number; period: number; algorithm: string }): boolean {
+  return entry.digits === 6 && entry.period === 30 && entry.algorithm === "SHA1"
+}
+
+function parseTwoFactorForm(
+  formData: FormData,
+  existingEntry?: {
+    name: string
+    issuer: string | null
+    accountName: string | null
+    digits: number
+    period: number
+    algorithm: string
+  }
+) {
+  const secretInput = formData.get("secret_input")?.toString() || ""
+  const note = getOptionalText(formData, "note")
+  const keepExistingMetadata = Boolean(existingEntry) && !isOtpAuthInput(secretInput)
+
+  const parsed = parseTotpInput(secretInput, {
+    name: keepExistingMetadata ? existingEntry?.name : undefined,
+    issuer: keepExistingMetadata ? existingEntry?.issuer : undefined,
+    accountName: keepExistingMetadata ? existingEntry?.accountName : undefined,
+    digits: keepExistingMetadata ? existingEntry?.digits : undefined,
+    period: keepExistingMetadata ? existingEntry?.period : undefined,
+    algorithm: keepExistingMetadata ? existingEntry?.algorithm : undefined,
+    note,
+  })
+
+  if (parsed.name === "未命名 2FA" && note) {
+    return { ...parsed, name: note }
+  }
+
+  return parsed
+}
+
 if (Astro.request.method === "POST") {
   const formData = await Astro.request.formData()
   const action = formData.get("action")?.toString()
 
   try {
     if (action === "create") {
-      const parsed = parseTotpInput(formData.get("secret_input")?.toString() || "", {
-        name: getOptionalText(formData, "name"),
-        issuer: getOptionalText(formData, "issuer"),
-        accountName: getOptionalText(formData, "account_name"),
-        digits: Number(formData.get("digits")?.toString() || "6"),
-        period: Number(formData.get("period")?.toString() || "30"),
-        algorithm: formData.get("algorithm")?.toString() || "SHA1",
-        note: getOptionalText(formData, "note"),
-      })
+      const parsed = parseTwoFactorForm(formData)
 
       const entry = await createTwoFactorEntry(db, {
         ...parsed,
@@ -72,16 +103,12 @@ if (Astro.request.method === "POST") {
     } else if (action === "edit") {
       const id = formData.get("id")?.toString()
       if (id) {
-        const parsed = parseTotpInput(formData.get("secret_input")?.toString() || "", {
-          name: getOptionalText(formData, "name"),
-          issuer: getOptionalText(formData, "issuer"),
-          accountName: getOptionalText(formData, "account_name"),
-          digits: Number(formData.get("digits")?.toString() || "6"),
-          period: Number(formData.get("period")?.toString() || "30"),
-          algorithm: formData.get("algorithm")?.toString() || "SHA1",
-          note: getOptionalText(formData, "note"),
-        })
+        const currentEntry = await getTwoFactorEntry(db, id, { includeSecret: true })
+        if (!currentEntry) {
+          throw new Error("2FA 条目不存在")
+        }
 
+        const parsed = parseTwoFactorForm(formData, currentEntry)
         await updateTwoFactorEntry(db, id, parsed)
         await createLog(db, {
           adminId: admin.id,
@@ -158,7 +185,9 @@ const showEditForm = urlAction === "edit" && !!editEntry
     <div class="flex items-center justify-between gap-4">
       <div>
         <h1 class="text-3xl font-bold tracking-tight">2FA 管理</h1>
-        <p class="mt-1 text-sm text-muted-foreground">集中维护 2FA 密钥，并分配给指定用户使用。</p>
+        <p class="mt-1 text-sm text-muted-foreground">
+          只需要粘贴密钥、`otpauth://` 链接，或直接扫码，系统会自动识别服务名、账号和标准 TOTP 参数。
+        </p>
       </div>
       <a href={(showCreateForm || showEditForm) ? "/admin/two-factor" : "/admin/two-factor?action=create"}>
         <Button>
@@ -181,71 +210,48 @@ const showEditForm = urlAction === "edit" && !!editEntry
           <CardTitle>{showEditForm ? "编辑 2FA 条目" : "创建 2FA 条目"}</CardTitle>
         </CardHeader>
         <CardContent>
-          <form method="POST" class="grid gap-4 lg:grid-cols-2">
+          <form method="POST" class="space-y-4">
             <input type="hidden" name="action" value={showEditForm ? "edit" : "create"} />
             {showEditForm && <input type="hidden" name="id" value={editEntry!.id} />}
 
             <div class="space-y-2">
-              <label class="text-sm font-medium">名称</label>
-              <Input id="two-factor-name-input" name="name" value={editEntry?.name || ""} placeholder="例如：Gmail 主号" />
-            </div>
-
-            <div class="space-y-2">
-              <label class="text-sm font-medium">服务商</label>
-              <Input id="two-factor-issuer-input" name="issuer" value={editEntry?.issuer || ""} placeholder="例如：Google" />
-            </div>
-
-            <div class="space-y-2">
-              <label class="text-sm font-medium">账号</label>
-              <Input id="two-factor-account-input" name="account_name" value={editEntry?.accountName || ""} placeholder="例如：demo@gmail.com" />
-            </div>
-
-            <div class="space-y-2">
-              <label class="text-sm font-medium">算法</label>
-              <select id="two-factor-algorithm-input" name="algorithm" class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm">
-                {["SHA1", "SHA256", "SHA512"].map((algorithm) => (
-                  <option value={algorithm} selected={(editEntry?.algorithm || "SHA1") === algorithm}>{algorithm}</option>
-                ))}
-              </select>
-            </div>
-
-            <div class="space-y-2">
-              <label class="text-sm font-medium">位数</label>
-              <Input id="two-factor-digits-input" type="number" min="4" max="10" name="digits" value={String(editEntry?.digits || 6)} />
-            </div>
-
-            <div class="space-y-2">
-              <label class="text-sm font-medium">周期（秒）</label>
-              <Input id="two-factor-period-input" type="number" min="5" max="300" name="period" value={String(editEntry?.period || 30)} />
-            </div>
-
-            <div class="space-y-2 lg:col-span-2">
               <label class="text-sm font-medium">2FA 密钥 / otpauth 链接</label>
               <textarea
                 id="two-factor-secret-input"
                 name="secret_input"
                 required
                 class="min-h-[110px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none focus:border-primary"
-                placeholder="支持 Base32 密钥，或直接粘贴 otpauth://totp/... 链接"
+                placeholder="直接粘贴 Base32 密钥、otpauth://totp/... 链接，或使用下方二维码导入"
               >{editEntry?.secret || ""}</textarea>
+              <p class="text-xs text-muted-foreground">
+                直接输入纯密钥时会使用标准 TOTP 默认值；编辑已有条目且只替换密钥时，会自动沿用当前识别结果。
+              </p>
             </div>
 
-            <div class="lg:col-span-2">
+            <div>
               <QrImportPanel
                 client:load
                 secretInputId="two-factor-secret-input"
-                nameInputId="two-factor-name-input"
-                issuerInputId="two-factor-issuer-input"
-                accountInputId="two-factor-account-input"
-                digitsInputId="two-factor-digits-input"
-                periodInputId="two-factor-period-input"
-                algorithmInputId="two-factor-algorithm-input"
                 autoSubmitCheckboxId="two-factor-auto-submit"
                 submitButtonId="two-factor-submit-button"
               />
             </div>
 
-            <div class="lg:col-span-2 flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm">
+            {showEditForm && (
+              <div class="rounded-lg border bg-muted/30 px-4 py-3">
+                <div class="text-sm font-medium">当前识别结果</div>
+                <div class="mt-2 flex flex-wrap gap-2">
+                  <Badge variant="outline">{editEntry!.name}</Badge>
+                  {editEntry?.issuer && <Badge variant="secondary">{editEntry.issuer}</Badge>}
+                  {editEntry?.accountName && <Badge variant="secondary" className="font-mono">{editEntry.accountName}</Badge>}
+                  {!isDefaultTotpConfig(editEntry!) && (
+                    <Badge variant="secondary">{editEntry!.algorithm} / {editEntry!.digits} 位 / {editEntry!.period}s</Badge>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <div class="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm">
               <input
                 id="two-factor-auto-submit"
                 type="checkbox"
@@ -256,19 +262,19 @@ const showEditForm = urlAction === "edit" && !!editEntry
               </label>
             </div>
 
-            <div class="space-y-2 lg:col-span-2">
-              <label class="text-sm font-medium">备注</label>
+            <div class="space-y-2">
+              <label class="text-sm font-medium">备注（可选）</label>
               <textarea
                 name="note"
                 class="min-h-[88px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none focus:border-primary"
-                placeholder="例如：用于团队共享的注册辅助账号"
+                placeholder="例如：Gmail 主号、团队共享账号、备用设备等"
               >{editEntry?.note || ""}</textarea>
             </div>
 
-            <div class="flex gap-2 lg:col-span-2">
+            <div class="flex gap-2">
               <Button id="two-factor-submit-button" type="submit">
                 <ShieldCheck className="mr-2 h-4 w-4" />
-                {showEditForm ? "保存更改" : "创建条目"}
+                {showEditForm ? "保存修改" : "创建条目"}
               </Button>
               <a href="/admin/two-factor">
                 <Button type="button" variant="outline">取消</Button>
@@ -285,8 +291,7 @@ const showEditForm = urlAction === "edit" && !!editEntry
           <thead class="[&_tr]:border-b">
             <tr class="border-b transition-colors hover:bg-muted/50">
               <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">名称</th>
-              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">服务 / 账号</th>
-              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">配置</th>
+              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">识别结果</th>
               <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">分配</th>
               <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">更新时间</th>
               <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">操作</th>
@@ -295,11 +300,13 @@ const showEditForm = urlAction === "edit" && !!editEntry
           <tbody class="[&_tr:last-child]:border-0">
             {entries.length === 0 ? (
               <tr>
-                <td colspan="6" class="p-8 text-center text-muted-foreground">暂无 2FA 条目</td>
+                <td colspan="5" class="p-8 text-center text-muted-foreground">暂无 2FA 条目</td>
               </tr>
             ) : (
               entries.map((entry) => {
                 const assignedUsers = assignmentMap[entry.id] || []
+                const hasCustomConfig = !isDefaultTotpConfig(entry)
+
                 return (
                   <tr class="border-b transition-colors hover:bg-muted/50">
                     <td class="p-4 align-middle">
@@ -308,15 +315,13 @@ const showEditForm = urlAction === "edit" && !!editEntry
                     </td>
                     <td class="p-4 align-middle">
                       <div class="space-y-1">
-                        <div>{entry.issuer || "-"}</div>
-                        <div class="font-mono text-xs text-muted-foreground">{entry.accountName || "-"}</div>
-                      </div>
-                    </td>
-                    <td class="p-4 align-middle">
-                      <div class="flex flex-wrap gap-2">
-                        <Badge variant="outline">{entry.algorithm}</Badge>
-                        <Badge variant="secondary">{entry.digits} 位</Badge>
-                        <Badge variant="secondary">{entry.period}s</Badge>
+                        <div>{entry.issuer || "未识别服务名"}</div>
+                        <div class="font-mono text-xs text-muted-foreground">{entry.accountName || "未识别账号"}</div>
+                        {hasCustomConfig && (
+                          <div class="text-xs text-muted-foreground">
+                            自定义参数：{entry.algorithm} / {entry.digits} 位 / {entry.period}s
+                          </div>
+                        )}
                       </div>
                     </td>
                     <td class="p-4 align-middle">
