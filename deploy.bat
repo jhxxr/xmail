@@ -8,15 +8,21 @@ echo Start deploying XMail to Cloudflare
 echo ====================================
 echo.
 
+set "PNPM_CMD=pnpm"
 where pnpm >nul 2>nul
 if errorlevel 1 (
-    echo [ERROR] pnpm not found. Please install pnpm ^(>=10^).
-    exit /b 1
+    where corepack >nul 2>nul
+    if errorlevel 1 (
+        echo [ERROR] Neither pnpm nor corepack was found. Please install Node.js 20+ or pnpm ^(>=10^).
+        exit /b 1
+    )
+    set "PNPM_CMD=corepack pnpm"
+    echo [INFO] pnpm not found in PATH, using corepack pnpm
 )
 
 if not exist "node_modules" (
     echo [1/3] Installing dependencies...
-    call pnpm install --frozen-lockfile
+    call %PNPM_CMD% install --frozen-lockfile
     if errorlevel 1 (
         echo Dependency installation failed.
         exit /b %errorlevel%
@@ -27,7 +33,7 @@ if not exist "node_modules" (
 echo.
 
 echo [2/3] Deploying Web + Email Worker...
-call pnpm run deploy
+call %PNPM_CMD% run deploy
 if errorlevel 1 (
     echo Deploy failed.
     exit /b %errorlevel%

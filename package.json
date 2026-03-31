@@ -4,11 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm --filter web dev",
-    "build": "pnpm --filter web build",
-    "deploy": "pnpm --filter web run deploy && pnpm --filter email-worker run deploy",
-    "db:generate": "pnpm --filter database db:generate",
-    "db:migrate": "pnpm --filter database db:migrate"
+    "dev": "corepack pnpm --filter web dev",
+    "build": "corepack pnpm --filter web build",
+    "deploy": "corepack pnpm --filter web run deploy && corepack pnpm --filter email-worker run deploy",
+    "db:generate": "corepack pnpm --filter database db:generate",
+    "db:migrate": "corepack pnpm --filter database db:migrate"
   },
   "devDependencies": {
     "typescript": "^5.9.2"

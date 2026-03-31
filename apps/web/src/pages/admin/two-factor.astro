@@ -16,12 +16,12 @@ import {
 import { verifyToken } from "../../lib/auth"
 import { parseTotpInput } from "../../lib/totp"
 import { formatDate } from "../../lib/utils"
-import { TwoFactorAssignmentManager } from "../../components/admin/TwoFactorAssignmentManager"
+import { AdminTwoFactorTable } from "../../components/admin/AdminTwoFactorTable"
 import QrImportPanel from "../../components/totp/QrImportPanel"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
 import { Button } from "../../components/ui/button"
 import { Badge } from "../../components/ui/badge"
-import { Pencil, Plus, ShieldCheck, Trash2 } from "lucide-react"
+import { Plus, ShieldCheck } from "lucide-react"
 
 const db = createDB(Astro.locals.runtime.env.DB)
 const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
@@ -155,7 +155,7 @@ if (Astro.url.searchParams.get("msg") === "updated") {
 }
 
 const users = await listUsers(db, { limit: 200 })
-const entries = await listTwoFactorEntries(db)
+const entries = await listTwoFactorEntries(db, { includeSecret: true })
 const entryAssignments = await Promise.all(
   entries.map(async (entry) => [entry.id, await getTwoFactorEntryUsers(db, entry.id)] as const)
 )
@@ -172,6 +172,27 @@ const assignmentMap = Object.fromEntries(
     }),
   ])
 )
+
+const tableUsers = users.map((user) => ({
+  id: user.id,
+  name: user.name,
+  note: user.note,
+  token: user.token,
+}))
+
+const tableEntries = entries.map((entry) => ({
+  id: entry.id,
+  name: entry.name,
+  issuer: entry.issuer,
+  accountName: entry.accountName,
+  secret: entry.secret || "",
+  digits: entry.digits,
+  period: entry.period,
+  algorithm: entry.algorithm,
+  note: entry.note,
+  updatedAtLabel: formatDate(entry.updatedAt),
+  assignedUsers: assignmentMap[entry.id] || [],
+}))
 
 const urlAction = Astro.url.searchParams.get("action")
 const editId = Astro.url.searchParams.get("id")
@@ -286,89 +307,7 @@ const showEditForm = urlAction === "edit" && !!editEntry
     )}
 
     <Card>
-      <div class="relative w-full overflow-auto">
-        <table class="w-full caption-bottom text-sm">
-          <thead class="[&_tr]:border-b">
-            <tr class="border-b transition-colors hover:bg-muted/50">
-              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">名称</th>
-              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">识别结果</th>
-              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">分配</th>
-              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">更新时间</th>
-              <th class="h-12 px-4 text-left align-middle font-medium text-muted-foreground">操作</th>
-            </tr>
-          </thead>
-          <tbody class="[&_tr:last-child]:border-0">
-            {entries.length === 0 ? (
-              <tr>
-                <td colspan="5" class="p-8 text-center text-muted-foreground">暂无 2FA 条目</td>
-              </tr>
-            ) : (
-              entries.map((entry) => {
-                const assignedUsers = assignmentMap[entry.id] || []
-                const hasCustomConfig = !isDefaultTotpConfig(entry)
-
-                return (
-                  <tr class="border-b transition-colors hover:bg-muted/50">
-                    <td class="p-4 align-middle">
-                      <div class="font-medium">{entry.name}</div>
-                      {entry.note && <div class="mt-1 text-xs text-muted-foreground">{entry.note}</div>}
-                    </td>
-                    <td class="p-4 align-middle">
-                      <div class="space-y-1">
-                        <div>{entry.issuer || "未识别服务名"}</div>
-                        <div class="font-mono text-xs text-muted-foreground">{entry.accountName || "未识别账号"}</div>
-                        {hasCustomConfig && (
-                          <div class="text-xs text-muted-foreground">
-                            自定义参数：{entry.algorithm} / {entry.digits} 位 / {entry.period}s
-                          </div>
-                        )}
-                      </div>
-                    </td>
-                    <td class="p-4 align-middle">
-                      <div class="space-y-2">
-                        <TwoFactorAssignmentManager
-                          client:load
-                          entryId={entry.id}
-                          entryName={entry.name}
-                          allUsers={users}
-                          assignedUsers={assignedUsers}
-                        />
-                        {assignedUsers.length > 0 && (
-                          <div class="flex flex-wrap gap-1">
-                            {assignedUsers.slice(0, 3).map((user) => (
-                              <Badge variant="outline" className="text-[10px]">{user.userName}</Badge>
-                            ))}
-                            {assignedUsers.length > 3 && (
-                              <Badge variant="outline" className="text-[10px]">+{assignedUsers.length - 3}</Badge>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </td>
-                    <td class="p-4 align-middle text-muted-foreground">{formatDate(entry.updatedAt)}</td>
-                    <td class="p-4 align-middle">
-                      <div class="flex gap-2">
-                        <a href={`/admin/two-factor?action=edit&id=${entry.id}`} title="编辑">
-                          <Button variant="ghost" size="icon" className="h-8 w-8">
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                        </a>
-                        <form method="POST" class="inline" onsubmit="return confirm('确定删除这个 2FA 条目吗？')">
-                          <input type="hidden" name="action" value="delete" />
-                          <input type="hidden" name="id" value={entry.id} />
-                          <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" title="删除">
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </form>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
+      <AdminTwoFactorTable client:load entries={tableEntries} allUsers={tableUsers} />
     </Card>
   </div>
 </AdminLayout>
