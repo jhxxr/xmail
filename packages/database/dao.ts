@@ -669,6 +669,18 @@ export async function getLogs(db: DB, options: { limit?: number; offset?: number
   return db.select().from(schema.logs).orderBy(desc(schema.logs.createdAt)).limit(limit).offset(offset).all()
 }
 
+export async function cleanupLogs(db: DB, scope: "older_than_7_days" | "older_than_3_days" | "all"): Promise<number> {
+  if (scope === "all") {
+    const result = await db.delete(schema.logs)
+    return result.rowsAffected ?? 0
+  }
+
+  const days = scope === "older_than_7_days" ? 7 : 3
+  const cutoff = now() - days * 24 * 60 * 60
+  const result = await db.delete(schema.logs).where(lt(schema.logs.createdAt, cutoff))
+  return result.rowsAffected ?? 0
+}
+
 // ============ 设置操作 ============
 
 export async function getSetting(db: DB, key: string): Promise<string | null> {
