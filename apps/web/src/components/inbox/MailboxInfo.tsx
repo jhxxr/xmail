@@ -80,8 +80,8 @@ export function MailboxInfo({ address, stats, className, mailboxes = [] }: Mailb
   return (
     <div className={cn("space-y-4", className)}>
       {/* 邮箱地址卡片 */}
-      <div className="bg-card border rounded-xl p-5 shadow-sm space-y-4 relative overflow-visible">
-        <div className="flex items-center justify-between">
+      <div className="bg-background/20 backdrop-blur-md border border-white/10 dark:border-white/5 rounded-[20px] p-6 shadow-xl space-y-4 relative overflow-visible hover:bg-background/30 transition-all duration-500">
+        <div className="flex items-center justify-between z-10 relative">
           <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1">
             {hasMultiple ? <Users className="h-3 w-3" /> : null}
             {hasMultiple ? "切换账号" : "当前邮箱"}

@@ -57,7 +57,7 @@ export function ServiceList({ services, isMobile = false }: ServiceListProps) {
                 href={s.loginUrl || "#"}
                 target="_blank"
                 rel="noreferrer"
-                className="group flex items-center justify-between p-3 rounded-lg border bg-background hover:border-primary/50 hover:bg-primary/5 transition-all active:scale-[0.98]"
+                className="group flex items-center justify-between p-3 rounded-xl border border-white/10 dark:border-white/5 bg-background/20 backdrop-blur-md shadow-sm hover:bg-background/40 hover:shadow-md transition-all duration-300 active:scale-[0.98]"
               >
                 <div className="flex items-center gap-3 min-w-0 flex-1">
                   <div className="h-8 w-8 rounded-md bg-muted flex items-center justify-center group-hover:bg-primary/10 transition-colors flex-shrink-0">
@@ -97,7 +97,7 @@ export function ServiceList({ services, isMobile = false }: ServiceListProps) {
             href={s.loginUrl || "#"}
             target="_blank"
             rel="noreferrer"
-            className="group flex items-center justify-between p-3 rounded-lg border bg-card hover:border-primary/50 hover:bg-primary/5 transition-all"
+            className="group flex items-center justify-between p-3 rounded-xl border border-white/10 dark:border-white/5 bg-background/20 backdrop-blur-md shadow-sm hover:bg-background/40 hover:-translate-y-0.5 hover:shadow-md transition-all duration-300"
           >
             <div className="flex items-center gap-3 min-w-0 flex-1">
               <div className="h-8 w-8 rounded-md bg-muted flex items-center justify-center group-hover:bg-primary/10 transition-colors flex-shrink-0">

@@ -38,8 +38,8 @@ const backHref = userId ? "/mailboxes" : (mailboxAddress ? `/?mailbox=${encodeUR
 ---
 
 <Layout title="2FA 工具">
-  <div class="min-h-screen bg-muted/30">
-    <header class="sticky top-0 z-10 border-b bg-background">
+  <div class="min-h-screen bg-transparent">
+    <header class="bg-background/40 backdrop-blur-xl border-b border-white/10 dark:border-white/5 sticky top-0 z-40">
       <div class="container mx-auto flex h-16 max-w-5xl items-center justify-between gap-4 px-4">
         <div class="flex items-center gap-3">
           <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
@@ -47,7 +47,7 @@ const backHref = userId ? "/mailboxes" : (mailboxAddress ? `/?mailbox=${encodeUR
           </div>
           <div>
             <h1 class="text-lg font-bold tracking-tight">2FA 工具</h1>
-            <p class="text-xs text-muted-foreground">输入密钥即可生成动态验证码</p>
+            <p class="text-[10px] sm:text-xs text-muted-foreground">随时生成动态验证码</p>
           </div>
         </div>
         <div class="flex items-center gap-2">
@@ -67,21 +67,23 @@ const backHref = userId ? "/mailboxes" : (mailboxAddress ? `/?mailbox=${encodeUR
       </div>
     </header>
 
-    <main class="container mx-auto max-w-5xl space-y-6 px-4 py-8">
-      <div class="rounded-2xl border bg-card p-5 shadow-sm">
-        <h2 class="text-base font-semibold">使用说明</h2>
-        <ul class="mt-2 space-y-1 text-sm text-muted-foreground">
-          <li>• 支持直接输入 Base32 密钥，或粘贴 `otpauth://` 链接。</li>
-          <li>• 如果管理员给你分配了 2FA，下方会直接显示可用验证码。</li>
-          <li>• 验证码在浏览器本地生成，不需要额外跳转到第三方网站。</li>
+    <main class="container mx-auto max-w-5xl space-y-6 px-4 py-8 relative z-10">
+      <div class="glass-panel p-6 rounded-2xl animate-fade-in-up">
+        <h2 class="text-base font-semibold text-foreground">使用说明</h2>
+        <ul class="mt-3 space-y-2 text-sm text-muted-foreground">
+          <li class="flex items-center gap-2"><div class="w-1.5 h-1.5 rounded-full bg-primary/50"></div>支持直接输入 Base32 密钥，或粘贴 `otpauth://` 链接。</li>
+          <li class="flex items-center gap-2"><div class="w-1.5 h-1.5 rounded-full bg-primary/50"></div>如果管理员给你分配了 2FA，下方会直接显示可用验证码。</li>
+          <li class="flex items-center gap-2"><div class="w-1.5 h-1.5 rounded-full bg-primary/50"></div>验证码在浏览器本地生成，不需要额外跳转到第三方网站。</li>
         </ul>
       </div>
 
-      <ManualTotpGenerator client:load />
+      <div class="animate-fade-in-up" style="animation-delay: 0.1s;">
+        <ManualTotpGenerator client:load />
+      </div>
 
-      <section class="space-y-4">
-        <div>
-          <h2 class="text-xl font-bold tracking-tight">我已分配的 2FA</h2>
+      <section class="space-y-4 animate-fade-in-up" style="animation-delay: 0.2s;">
+        <div class="pl-2 border-l-4 border-primary/50">
+          <h2 class="text-xl font-bold tracking-tight text-foreground">我已分配的 2FA</h2>
           <p class="mt-1 text-sm text-muted-foreground">
             {userId ? "管理员分配给你的 2FA 会在这里自动生成当前验证码。" : "当前登录方式只支持临时生成，不显示管理员分配列表。"}
           </p>

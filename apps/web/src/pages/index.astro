@@ -208,9 +208,10 @@ if (selectedMailbox) {
 <Layout title={selectedMailbox ? "收件箱" : "登录"}>
   {!userId && !selectedMailbox ? (
     <!-- 登录页面 -->
-    <div class="min-h-screen flex items-center justify-center bg-muted/50 p-4">
-      <Card class="w-full max-w-md">
-        <CardHeader className="space-y-1 text-center">
+    <div class="min-h-screen flex items-center justify-center p-4 relative z-10">
+      <Card className="w-full max-w-md glass-panel relative overflow-hidden animate-scale-in shadow-2xl">
+        <div class="absolute inset-0 bg-gradient-to-tr from-primary/20 via-transparent to-transparent opacity-50 pointer-events-none"></div>
+        <CardHeader className="space-y-1 text-center relative z-10">
           <div class="flex justify-center mb-4">
             <div class="w-12 h-12 bg-primary rounded-xl flex items-center justify-center text-primary-foreground">
               <Mail className="w-6 h-6" />
@@ -300,49 +301,51 @@ if (selectedMailbox) {
     </div>
   ) : (
     <!-- 收件箱页面 - 新响应式布局 -->
-    <div class="flex min-h-screen flex-col">
+    <div class="flex h-screen overflow-hidden flex-col bg-transparent relative z-10">
       <!-- 移动端布局 -->
-      <div class="lg:hidden flex flex-col flex-1">
-        <MobileHeader
-          mailboxes={mailboxes}
-          selectedMailbox={selectedMailbox || ""}
-          stats={stats}
-          services={services}
-          hasUserId={!!userId}
-        />
+      <div class="lg:hidden flex flex-col flex-1 pb-4">
+        <div class="animate-fade-in-up" style="animation-duration: 0.6s;">
+          <MobileHeader
+            mailboxes={mailboxes}
+            selectedMailbox={selectedMailbox || ""}
+            stats={stats}
+            services={services}
+            hasUserId={!!userId}
+          />
+        </div>
 
         <!-- 移动端邮件列表 -->
-        <main class="flex-1 bg-muted/30">
-          <div class="container max-w-4xl mx-auto px-4 py-6">
+        <main class="flex-1 overflow-y-auto bg-transparent px-4 mt-2">
+          <div class="w-full mx-auto animate-fade-in-up" style="animation-duration: 0.6s; animation-delay: 0.1s; animation-fill-mode: both;">
             {message && (
-              <div class="mb-6 p-4 rounded-md border bg-green-50 text-green-900 border-green-200">
+              <div class="mb-6 p-4 rounded-md border bg-primary/10 text-primary border-primary/20">
                 {message}
               </div>
             )}
 
             {emails.length === 0 ? (
-              <Card className="flex flex-col items-center justify-center py-16 text-center">
-                <div class="w-16 h-16 bg-muted rounded-full flex items-center justify-center mb-4">
-                  <Inbox className="w-8 h-8 text-muted-foreground" />
+              <div className="flex flex-col items-center justify-center py-16 text-center border border-border/40 rounded-lg bg-background/20 backdrop-blur-sm">
+                <div class="w-12 h-12 bg-muted/50 rounded-full flex items-center justify-center mb-4">
+                  <Inbox className="w-6 h-6 text-muted-foreground" />
                 </div>
-                <h3 class="text-lg font-medium">暂无邮件</h3>
-                <p class="text-muted-foreground mt-2 max-w-sm">
-                  您的收件箱是空的。发送邮件到 <span class="font-mono text-foreground bg-muted px-1 rounded">{selectedMailbox}</span> 试试看。
+                <h3 class="text-sm font-medium">空空如也</h3>
+                <p class="text-xs text-muted-foreground mt-2 max-w-sm px-4">
+                  发送邮件到 <span class="font-mono text-foreground bg-muted/50 px-1 rounded">{selectedMailbox}</span> 试试看
                 </p>
-                <Button variant="outline" className="mt-6" onclick="location.reload()">
-                  <RefreshCw className="h-4 w-4 mr-2" />
-                  刷新页面
+                <Button variant="outline" size="sm" className="mt-4" onclick="location.reload()">
+                  <RefreshCw className="h-3 w-3 mr-2" />
+                  刷新
                 </Button>
-              </Card>
+              </div>
             ) : (
-              <Card>
-                <div class="divide-y">
+              <div class="border border-border/40 bg-background/20 backdrop-blur-sm rounded-lg overflow-hidden">
+                <div class="divide-y divide-border/40">
                   {emails.map((email) => {
                     const verificationCode = extractVerificationCode(email.text, email.html)
                       || extractVerificationCode(email.subject, null)
                     return (
-                      <div class={`relative ${!email.isRead ? "bg-primary/5" : ""}`}>
-                        <div class="block p-4 hover:bg-muted/50 transition-all group relative">
+                      <div class={`relative ${!email.isRead ? "bg-primary/5 border-l-2 border-l-primary" : "border-l-2 border-l-transparent"}`}>
+                        <div class="block p-4 hover:bg-muted/40 transition-all group relative">
                           <a href={`/mail/${email.id}`} class="absolute inset-0 z-0" aria-label="查看邮件详情"></a>
                           <div class="flex justify-between items-start gap-4 relative z-10 pointer-events-none">
                             <div class="flex-1 min-w-0">
@@ -398,54 +401,65 @@ if (selectedMailbox) {
                     )
                   })}
                 </div>
-              </Card>
+              </div>
             )}
           </div>
         </main>
       </div>
 
       <!-- 桌面端布局 -->
-      <div class="hidden lg:flex flex-1">
-        <DesktopSidebar
-          mailboxes={mailboxes}
-          selectedMailbox={selectedMailbox || ""}
-          stats={stats}
-          services={services}
-          hasUserId={!!userId}
-        />
+      <div class="hidden lg:flex flex-1 overflow-hidden p-6 gap-6 relative">
+        <div class="h-full rounded-[24px] overflow-hidden glass-panel flex-shrink-0 animate-fade-in-up z-20" style="animation-duration: 0.8s;">
+          <DesktopSidebar
+            mailboxes={mailboxes}
+            selectedMailbox={selectedMailbox || ""}
+            stats={stats}
+            services={services}
+            hasUserId={!!userId}
+          />
+        </div>
 
         <!-- 桌面端邮件列表 -->
-        <main class="flex-1 bg-muted/30">
-          <div class="container max-w-4xl mx-auto px-4 py-6 lg:py-8">
+        <div class="flex-1 h-full rounded-[24px] overflow-hidden glass-panel flex flex-col relative animate-fade-in-up z-10" style="animation-duration: 0.8s; animation-delay: 0.1s; animation-fill-mode: both;">
+          <main class="flex-1 overflow-y-auto bg-transparent relative flex flex-col scroll-smooth">
+            <div class="absolute inset-0 bg-gradient-to-tr from-primary/5 via-transparent to-transparent opacity-30 pointer-events-none -z-10 mix-blend-overlay"></div>
+            
+            <div class="sticky top-0 z-20 flex items-center justify-between px-6 py-4 border-b border-border/20 bg-background/40 backdrop-blur-xl">
+              <h2 class="text-sm font-bold tracking-wide flex items-center gap-2 text-primary">
+                <Inbox className="w-4 h-4" />
+                收件箱
+              </h2>
+            </div>
+
+            <div class="w-full flex-1 p-2">
             {message && (
-              <div class="mb-6 p-4 rounded-md border bg-green-50 text-green-900 border-green-200">
+              <div class="m-6 p-3 rounded-md border bg-primary/10 text-primary border-primary/20 text-sm">
                 {message}
               </div>
             )}
 
             {emails.length === 0 ? (
-              <Card className="flex flex-col items-center justify-center py-16 text-center">
-                <div class="w-16 h-16 bg-muted rounded-full flex items-center justify-center mb-4">
-                  <Inbox className="w-8 h-8 text-muted-foreground" />
+              <div className="flex flex-col items-center justify-center h-full min-h-[400px] text-center animate-fade-in-up" style="animation-delay: 0.2s; animation-fill-mode: both;">
+                <div class="w-16 h-16 bg-primary/10 rounded-2xl flex items-center justify-center mb-4 transform -rotate-6 hover:rotate-0 transition-transform duration-300">
+                  <Inbox className="w-8 h-8 text-primary" />
                 </div>
-                <h3 class="text-lg font-medium">暂无邮件</h3>
-                <p class="text-muted-foreground mt-2 max-w-sm">
-                  您的收件箱是空的。发送邮件到 <span class="font-mono text-foreground bg-muted px-1 rounded">{selectedMailbox}</span> 试试看。
-                </p>
-                <Button variant="outline" className="mt-6" onclick="location.reload()">
-                  <RefreshCw className="h-4 w-4 mr-2" />
-                  刷新页面
+                <h3 class="text-sm font-semibold text-foreground">空空如也</h3>
+                <p class="text-xs text-muted-foreground mt-1 mb-4">暂无邮件，等待新邮件到达</p>
+                <Button variant="outline" size="sm" className="rounded-full shadow-sm hover:shadow" onclick="location.reload()">
+                  <RefreshCw className="h-3 w-3 mr-2" />
+                  刷新
                 </Button>
-              </Card>
+              </div>
             ) : (
-              <Card>
-                <div class="divide-y">
-                  {emails.map((email) => {
+              <div class="flex flex-col space-y-2 p-2">
+                <div class="space-y-2">
+                  {emails.map((email, index) => {
                     const verificationCode = extractVerificationCode(email.text, email.html)
                       || extractVerificationCode(email.subject, null)
                     return (
-                      <div class={`relative ${!email.isRead ? "bg-primary/5" : ""}`}>
-                        <div class="block p-4 hover:bg-muted/50 transition-all group relative">
+                      <div class={`relative glass-card rounded-xl overflow-hidden group animate-fade-in-up`} style={`animation-delay: ${index * 0.05 + 0.2}s; animation-fill-mode: both;`}>
+                        <div class={`absolute left-0 top-0 bottom-0 w-1 transition-colors ${!email.isRead ? "bg-primary" : "bg-transparent group-hover:bg-primary/30"}`}></div>
+                        <div class="block px-6 py-4 transition-all relative">
                           <a href={`/mail/${email.id}`} class="absolute inset-0 z-0" aria-label="查看邮件详情"></a>
                           <div class="flex justify-between items-start gap-4 relative z-10 pointer-events-none">
                             <div class="flex-1 min-w-0">
@@ -501,9 +515,11 @@ if (selectedMailbox) {
                     )
                   })}
                 </div>
-              </Card>
+              </div>
             )}
           </div>
+        </div>
+      </div>
         </main>
       </div>
     </div>

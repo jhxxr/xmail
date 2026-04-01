@@ -17,14 +17,37 @@ const currentPath = Astro.url.pathname
     <title>{title} - XMail Admin</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   </head>
-  <body class="min-h-screen bg-background text-foreground font-sans antialiased">
-    <div class="flex min-h-screen">
-      <AdminSidebar currentPath={currentPath} client:load />
-      <main class="flex-1 overflow-y-auto h-screen pt-14 md:pt-0">
-        <div class="container py-4 md:py-8 px-4 md:px-8 max-w-7xl mx-auto">
-          <slot />
+  <body class="min-h-screen bg-background text-foreground font-sans antialiased relative selection:bg-primary/30 selection:text-primary overflow-x-hidden">
+    <!-- Immersive Animated Ambient Background -->
+    <div class="fixed inset-0 z-[-1] overflow-hidden bg-background">
+      <div class="absolute top-[10%] -left-[10%] w-[50%] h-[50%] rounded-full bg-primary/15 mix-blend-multiply blur-[120px] animate-blob"></div>
+      <div class="absolute bottom-[20%] -right-[20%] w-[60%] h-[60%] rounded-full bg-accent/20 mix-blend-multiply blur-[120px] animate-blob" style="animation-delay: 2s"></div>
+      <!-- Subtle Grid Overlay -->
+      <div class="absolute inset-0 bg-[linear-gradient(to_right,#80808012_1px,transparent_1px),linear-gradient(to_bottom,#80808012_1px,transparent_1px)] bg-[size:24px_24px] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)]"></div>
+      <div class="absolute inset-0 bg-background/50 backdrop-blur-[80px] dark:backdrop-blur-[120px]"></div>
+    </div>
+    <div class="flex h-screen overflow-hidden bg-transparent">
+      <!-- 桌面端悬浮布局 -->
+      <div class="hidden md:flex flex-1 overflow-hidden p-6 gap-6 relative z-10">
+        <div class="h-full rounded-[24px] overflow-hidden glass-panel flex-shrink-0 animate-fade-in-up z-20" style="animation-duration: 0.8s;">
+          <AdminSidebar currentPath={currentPath} client:load />
         </div>
-      </main>
+        <main class="flex-1 h-full overflow-y-auto rounded-[24px] glass-panel relative animate-fade-in-up z-10" style="animation-duration: 0.8s; animation-delay: 0.1s; animation-fill-mode: both;">
+          <div class="container py-8 px-8 max-w-7xl mx-auto h-full">
+            <slot />
+          </div>
+        </main>
+      </div>
+
+      <!-- 移动端弹性布局 -->
+      <div class="md:hidden flex flex-col flex-1 h-screen relative z-10">
+        <AdminSidebar currentPath={currentPath} client:load />
+        <main class="flex-1 overflow-y-auto pt-14">
+          <div class="container py-4 px-4 mx-auto animate-fade-in-up">
+            <slot />
+          </div>
+        </main>
+      </div>
     </div>
   </body>
 </html>

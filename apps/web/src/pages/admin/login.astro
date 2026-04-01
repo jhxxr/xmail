@@ -63,9 +63,10 @@ if (Astro.request.method === "POST") {
 ---
 
 <Layout title="管理员登录">
-  <div class="min-h-screen flex items-center justify-center bg-muted/50 p-4">
-    <Card class="w-full max-w-md">
-      <CardHeader className="space-y-1 text-center">
+  <div class="min-h-screen flex items-center justify-center bg-transparent p-4">
+    <div class="w-full max-w-md animate-fade-in-up relative z-10">
+      <Card class="w-full">
+        <CardHeader className="space-y-1 text-center pb-6">
         <div class="flex justify-center mb-4">
           <div class="w-12 h-12 bg-primary rounded-xl flex items-center justify-center text-primary-foreground">
             <Lock className="w-6 h-6" />
@@ -117,6 +118,7 @@ if (Astro.request.method === "POST") {
           首次登录请使用环境变量中设置的 ADMIN_PASSWORD
         </p>
       </CardContent>
-    </Card>
+      </Card>
+    </div>
   </div>
 </Layout>

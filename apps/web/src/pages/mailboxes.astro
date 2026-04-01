@@ -202,9 +202,9 @@ const hasAnyMailbox = mailboxesWithStats.length > 0 || sharedMailboxesWithStats.
 ---
 
 <Layout title="我的邮箱">
-  <div class="min-h-screen bg-muted/30">
+  <div class="min-h-screen bg-transparent">
     <!-- 顶部导航栏 -->
-    <header class="bg-background border-b sticky top-0 z-10">
+    <header class="bg-background/40 backdrop-blur-xl border-b border-white/10 dark:border-white/5 sticky top-0 z-40">
       <div class="container max-w-5xl mx-auto px-4 h-16 flex justify-between items-center">
         <div class="flex items-center gap-4">
           <div class="w-8 h-8 bg-primary rounded-lg flex items-center justify-center text-primary-foreground shadow-sm">
@@ -232,11 +232,11 @@ const hasAnyMailbox = mailboxesWithStats.length > 0 || sharedMailboxesWithStats.
     <!-- 邮箱列表 -->
     <main class="container max-w-5xl mx-auto px-4 py-8">
       {!hasAnyMailbox ? (
-        <Card className="flex flex-col items-center justify-center py-16 text-center border-dashed shadow-sm">
-          <div class="w-16 h-16 bg-muted/50 rounded-full flex items-center justify-center mb-4">
-            <Inbox className="w-8 h-8 text-muted-foreground" />
+        <Card className="flex flex-col items-center justify-center py-16 text-center glass-panel animate-fade-in-up">
+          <div class="w-16 h-16 bg-primary/10 rounded-2xl flex items-center justify-center mb-4 transform -rotate-6 transition-transform duration-300">
+            <Inbox className="w-8 h-8 text-primary" />
           </div>
-          <h3 class="text-lg font-medium">暂无邮箱</h3>
+          <h3 class="text-lg font-medium text-foreground">暂无邮箱</h3>
           <p class="text-muted-foreground mt-2 max-w-sm">
             您还没有任何邮箱。请联系管理员分配邮箱。
           </p>
@@ -263,16 +263,16 @@ const hasAnyMailbox = mailboxesWithStats.length > 0 || sharedMailboxesWithStats.
               <div class="space-y-4">
                 {/* 渲染各个服务分组 */}
                 {groups.map((group, index) => (
-                  <details open={true} class="group/section bg-card rounded-lg border shadow-sm overflow-hidden">
-                    <summary class="flex items-center gap-3 px-4 py-3 cursor-pointer list-none outline-none select-none hover:bg-muted/50 transition-colors">
-                      <div class="bg-primary/5 w-1 h-6 rounded-full"></div>
+                  <details open={true} class="group/section glass-panel rounded-2xl overflow-hidden animate-fade-in-up" style={`animation-delay: ${index * 0.1}s;`}>
+                    <summary class="flex items-center gap-3 px-4 py-4 cursor-pointer list-none outline-none select-none hover:bg-white/5 transition-colors">
+                      <div class="bg-primary/20 w-1 h-6 rounded-full"></div>
                       <span class="font-semibold text-base">{group.name}</span>
-                      <Badge variant="secondary" className="ml-auto rounded-full px-2.5">
+                      <Badge variant="secondary" className="ml-auto rounded-full px-2.5 bg-background/50">
                         {group.mailboxes.length}
                       </Badge>
                       <ChevronRight className="h-4 w-4 text-muted-foreground transition-transform duration-200 group-open/section:rotate-90" />
                     </summary>
-                    <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3 p-4 pt-0 border-t border-muted/50 mt-3">
+                    <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3 p-4 pt-0 mt-2">
                       {group.mailboxes.map((mailbox) => {
                         // 找到该邮箱在当前服务分组中对应的服务到期时间
                         const services = servicesMap[mailbox.address] || []
@@ -286,7 +286,7 @@ const hasAnyMailbox = mailboxesWithStats.length > 0 || sharedMailboxesWithStats.
 
                         return (
                         <a href={`/?mailbox=${mailbox.address}`}>
-                          <Card className={`group hover:border-primary/50 hover:shadow-md transition-all cursor-pointer h-full ${isExpired ? 'opacity-70' : ''}`}>
+                          <Card className={`glass-card group h-full ${isExpired ? 'opacity-70 grayscale' : ''}`}>
                             <CardHeader className="pb-3 p-4">
                               <div class="flex items-start justify-between gap-2">
                                 <div class="flex-1 min-w-0">
@@ -328,19 +328,19 @@ const hasAnyMailbox = mailboxesWithStats.length > 0 || sharedMailboxesWithStats.
 
                 {/* 渲染未分类分组 */}
                 {uncategorized.length > 0 && (
-                  <details open={groups.length === 0} class="group/section bg-card rounded-lg border shadow-sm overflow-hidden">
-                    <summary class="flex items-center gap-3 px-4 py-3 cursor-pointer list-none outline-none select-none hover:bg-muted/50 transition-colors">
+                  <details open={groups.length === 0} class="group/section glass-panel rounded-2xl overflow-hidden animate-fade-in-up">
+                    <summary class="flex items-center gap-3 px-4 py-4 cursor-pointer list-none outline-none select-none hover:bg-white/5 transition-colors">
                       <div class="bg-muted w-1 h-6 rounded-full"></div>
                       <span class="font-semibold text-base text-muted-foreground">未分类</span>
-                      <Badge variant="outline" className="ml-auto rounded-full px-2.5">
+                      <Badge variant="outline" className="ml-auto rounded-full px-2.5 bg-background/50 text-foreground">
                         {uncategorized.length}
                       </Badge>
                       <ChevronRight className="h-4 w-4 text-muted-foreground transition-transform duration-200 group-open/section:rotate-90" />
                     </summary>
-                    <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3 p-4 pt-0 border-t border-muted/50 mt-3">
+                    <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3 p-4 pt-0 mt-2">
                       {uncategorized.map((mailbox) => (
                         <a href={`/?mailbox=${mailbox.address}`}>
-                          <Card className="group hover:border-primary/50 hover:shadow-md transition-all cursor-pointer h-full">
+                          <Card className="glass-card group h-full">
                             <CardHeader className="pb-3 p-4">
                               <div class="flex items-start justify-between gap-2">
                                 <div class="flex-1 min-w-0">
@@ -396,17 +396,17 @@ const hasAnyMailbox = mailboxesWithStats.length > 0 || sharedMailboxesWithStats.
 
               <div class="space-y-4">
                 {/* 渲染共享服务分组 */}
-                {sharedGroups.map((group) => (
-                  <details open={true} class="group/section bg-card rounded-lg border shadow-sm overflow-hidden">
-                    <summary class="flex items-center gap-3 px-4 py-3 cursor-pointer list-none outline-none select-none hover:bg-muted/50 transition-colors">
-                      <div class="bg-purple-500/20 w-1 h-6 rounded-full"></div>
+                {sharedGroups.map((group, index) => (
+                  <details open={true} class="group/section glass-panel border-purple-500/20 rounded-2xl overflow-hidden animate-fade-in-up" style={`animation-delay: ${index * 0.1}s;`}>
+                    <summary class="flex items-center gap-3 px-4 py-4 cursor-pointer list-none outline-none select-none hover:bg-purple-500/5 transition-colors">
+                      <div class="bg-purple-500/40 w-1 h-6 rounded-full"></div>
                       <span class="font-semibold text-base">{group.name}</span>
-                      <Badge variant="secondary" className="ml-auto rounded-full px-2.5">
+                      <Badge variant="secondary" className="ml-auto rounded-full px-2.5 bg-background/50">
                         {group.mailboxes.length}
                       </Badge>
                       <ChevronRight className="h-4 w-4 text-muted-foreground transition-transform duration-200 group-open/section:rotate-90" />
                     </summary>
-                    <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3 p-4 pt-0 border-t border-muted/50 mt-3">
+                    <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3 p-4 pt-0 mt-2">
                       {group.mailboxes.map((mailbox) => {
                         const services = servicesMap[mailbox.address] || []
                         const groupService = services.find(s =>
@@ -419,7 +419,7 @@ const hasAnyMailbox = mailboxesWithStats.length > 0 || sharedMailboxesWithStats.
 
                         return (
                         <a href={`/?mailbox=${mailbox.address}`}>
-                          <Card className={`group hover:border-purple-500/50 hover:shadow-md transition-all cursor-pointer h-full ${isExpired ? 'opacity-70' : ''}`}>
+                          <Card className={`bg-background/40 group hover:border-purple-500/50 hover:shadow-md transition-all cursor-pointer h-full ${isExpired ? 'opacity-70' : ''}`}>
                             <CardHeader className="pb-3 p-4">
                               <div class="flex items-start justify-between gap-2">
                                 <div class="flex-1 min-w-0">
@@ -466,19 +466,19 @@ const hasAnyMailbox = mailboxesWithStats.length > 0 || sharedMailboxesWithStats.
 
                 {/* 渲染共享未分类分组 */}
                 {sharedUncategorized.length > 0 && (
-                  <details open={sharedGroups.length === 0} class="group/section bg-card rounded-lg border shadow-sm overflow-hidden">
-                    <summary class="flex items-center gap-3 px-4 py-3 cursor-pointer list-none outline-none select-none hover:bg-muted/50 transition-colors">
-                      <div class="bg-muted w-1 h-6 rounded-full"></div>
+                  <details open={sharedGroups.length === 0} class="group/section glass-panel border-purple-500/20 rounded-2xl overflow-hidden animate-fade-in-up">
+                    <summary class="flex items-center gap-3 px-4 py-4 cursor-pointer list-none outline-none select-none hover:bg-purple-500/5 transition-colors">
+                      <div class="bg-purple-500/40 w-1 h-6 rounded-full"></div>
                       <span class="font-semibold text-base text-muted-foreground">未分类</span>
-                      <Badge variant="outline" className="ml-auto rounded-full px-2.5">
+                      <Badge variant="outline" className="ml-auto rounded-full px-2.5 bg-background/50 text-foreground border-purple-500/20">
                         {sharedUncategorized.length}
                       </Badge>
                       <ChevronRight className="h-4 w-4 text-muted-foreground transition-transform duration-200 group-open/section:rotate-90" />
                     </summary>
-                    <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3 p-4 pt-0 border-t border-muted/50 mt-3">
+                    <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3 p-4 pt-0 mt-2">
                       {sharedUncategorized.map((mailbox) => (
                         <a href={`/?mailbox=${mailbox.address}`}>
-                          <Card className="group hover:border-purple-500/50 hover:shadow-md transition-all cursor-pointer h-full">
+                          <Card className="glass-card group h-full">
                             <CardHeader className="pb-3 p-4">
                               <div class="flex items-start justify-between gap-2">
                                 <div class="flex-1 min-w-0">
@@ -538,19 +538,19 @@ const hasAnyMailbox = mailboxesWithStats.length > 0 || sharedMailboxesWithStats.
 
               <div class="space-y-4">
                 {externalGroups.map((group, index) => (
-                  <details open={true} class="group/section bg-card rounded-lg border shadow-sm overflow-hidden">
-                    <summary class="flex items-center gap-3 px-4 py-3 cursor-pointer list-none outline-none select-none hover:bg-muted/50 transition-colors">
-                      <div class="bg-blue-500/20 w-1 h-6 rounded-full"></div>
+                  <details open={true} class="group/section glass-panel border-blue-500/20 rounded-2xl overflow-hidden animate-fade-in-up" style={`animation-delay: ${index * 0.1}s;`}>
+                    <summary class="flex items-center gap-3 px-4 py-4 cursor-pointer list-none outline-none select-none hover:bg-blue-500/5 transition-colors">
+                      <div class="bg-blue-500/40 w-1 h-6 rounded-full"></div>
                       <span class="font-semibold text-base">{group.name}</span>
-                      <Badge variant="secondary" className="ml-auto rounded-full px-2.5">
+                      <Badge variant="secondary" className="ml-auto rounded-full px-2.5 bg-background/50">
                         {group.accounts.length}
                       </Badge>
                       <ChevronRight className="h-4 w-4 text-muted-foreground transition-transform duration-200 group-open/section:rotate-90" />
                     </summary>
-                    <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3 p-4 pt-0 border-t border-muted/50 mt-3">
+                    <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3 p-4 pt-0 mt-2">
                       {group.accounts.map((account) => (
                         <a href={`/external/${account.id}`}>
-                          <Card className="group hover:border-blue-500/50 hover:shadow-md transition-all cursor-pointer h-full">
+                          <Card className="glass-card group h-full hover:border-blue-500/50">
                             <CardHeader className="pb-3 p-4">
                               <div class="flex items-start justify-between gap-2">
                                 <div class="flex-1 min-w-0">
@@ -581,19 +581,19 @@ const hasAnyMailbox = mailboxesWithStats.length > 0 || sharedMailboxesWithStats.
                 ))}
 
                 {externalUncategorized.length > 0 && (
-                  <details open={externalGroups.length === 0} class="group/section bg-card rounded-lg border shadow-sm overflow-hidden">
-                    <summary class="flex items-center gap-3 px-4 py-3 cursor-pointer list-none outline-none select-none hover:bg-muted/50 transition-colors">
-                      <div class="bg-muted w-1 h-6 rounded-full"></div>
+                  <details open={externalGroups.length === 0} class="group/section glass-panel border-blue-500/20 rounded-2xl overflow-hidden animate-fade-in-up">
+                    <summary class="flex items-center gap-3 px-4 py-4 cursor-pointer list-none outline-none select-none hover:bg-blue-500/5 transition-colors">
+                      <div class="bg-blue-500/40 w-1 h-6 rounded-full"></div>
                       <span class="font-semibold text-base text-muted-foreground">未分类</span>
-                      <Badge variant="outline" className="ml-auto rounded-full px-2.5">
+                      <Badge variant="outline" className="ml-auto rounded-full px-2.5 bg-background/50 border-blue-500/20 text-foreground">
                         {externalUncategorized.length}
                       </Badge>
                       <ChevronRight className="h-4 w-4 text-muted-foreground transition-transform duration-200 group-open/section:rotate-90" />
                     </summary>
-                    <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3 p-4 pt-0 border-t border-muted/50 mt-3">
+                    <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3 p-4 pt-0 mt-2">
                       {externalUncategorized.map((account) => (
                         <a href={`/external/${account.id}`}>
-                          <Card className="group hover:border-blue-500/50 hover:shadow-md transition-all cursor-pointer h-full">
+                          <Card className="glass-card group h-full hover:border-blue-500/50">
                             <CardHeader className="pb-3 p-4">
                               <div class="flex items-start justify-between gap-2">
                                 <div class="flex-1 min-w-0">

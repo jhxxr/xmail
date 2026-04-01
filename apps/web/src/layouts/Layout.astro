@@ -14,7 +14,16 @@ const { title } = Astro.props
     <title>{title} - XMail</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   </head>
-  <body class="min-h-screen bg-background text-foreground font-sans antialiased">
+  <body class="min-h-screen bg-background text-foreground font-sans antialiased relative selection:bg-primary/30 selection:text-primary overflow-x-hidden">
+    <!-- Immersive Animated Ambient Background -->
+    <div class="fixed inset-0 z-[-1] overflow-hidden bg-background">
+      <div class="absolute -top-[40%] -left-[20%] w-[70%] h-[70%] rounded-full bg-primary/20 mix-blend-multiply blur-[120px] animate-blob"></div>
+      <div class="absolute top-[20%] -right-[20%] w-[60%] h-[60%] rounded-full bg-accent/30 mix-blend-multiply blur-[120px] animate-blob" style="animation-delay: 2s"></div>
+      <div class="absolute -bottom-[40%] left-[20%] w-[80%] h-[80%] rounded-full bg-secondary/30 mix-blend-multiply blur-[120px] animate-blob" style="animation-delay: 4s"></div>
+      <!-- Subtle Grid Overlay -->
+      <div class="absolute inset-0 bg-[linear-gradient(to_right,#80808012_1px,transparent_1px),linear-gradient(to_bottom,#80808012_1px,transparent_1px)] bg-[size:24px_24px] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)]"></div>
+      <div class="absolute inset-0 bg-background/50 backdrop-blur-[60px] dark:backdrop-blur-[100px]"></div>
+    </div>
     <slot />
   </body>
 </html>

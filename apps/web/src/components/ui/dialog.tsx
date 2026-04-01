@@ -101,18 +101,18 @@ export function DialogContent({
   if (!open || !mounted) return null
 
   const content = (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="fixed inset-0 z-50 flex items-center justify-center animate-fade-in-up" style={{ animationDuration: "0.3s" }}>
       {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-black/50"
+        className="fixed inset-0 bg-black/40 backdrop-blur-md transition-all duration-300"
         onClick={() => setOpen(false)}
       />
 
       {/* Dialog */}
       <div
         className={cn(
-          "relative z-50 w-full max-w-lg rounded-lg border bg-background p-6 shadow-lg mx-4",
-          "max-h-[90vh] overflow-y-auto",
+          "relative z-50 w-full max-w-lg rounded-2xl border border-white/10 dark:border-white/5 bg-background/60 backdrop-blur-2xl p-6 shadow-2xl mx-4",
+          "max-h-[85vh] overflow-y-auto",
           className
         )}
         onClick={(e) => e.stopPropagation()}

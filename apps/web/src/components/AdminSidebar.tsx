@@ -39,9 +39,9 @@ export function AdminSidebar({ currentPath }: SidebarProps) {
 
   const SidebarContent = () => (
     <>
-      <div className="p-4 md:p-6 border-b border-border flex items-center justify-between">
+      <div className="p-4 md:p-6 border-b border-white/10 dark:border-white/5 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center text-primary-foreground font-bold text-xl">
+          <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center text-primary-foreground font-bold text-xl shadow-sm">
             X
           </div>
           <span className="text-xl font-bold text-foreground">XMail Admin</span>
@@ -79,10 +79,10 @@ export function AdminSidebar({ currentPath }: SidebarProps) {
         })}
       </nav>
 
-      <div className="p-4 border-t border-border">
+      <div className="p-4 border-t border-white/10 dark:border-white/5">
         <a
           href="/admin/logout"
-          className="flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium text-destructive hover:bg-destructive/10 transition-colors"
+          className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-destructive hover:bg-destructive/10 transition-colors"
         >
           <LogOut className="w-4 h-4" />
           退出登录
@@ -94,7 +94,7 @@ export function AdminSidebar({ currentPath }: SidebarProps) {
   return (
     <>
       {/* 移动端顶部导航栏 */}
-      <div className="md:hidden fixed top-0 left-0 right-0 z-50 bg-card border-b border-border h-14 flex items-center px-4 justify-between">
+      <div className="md:hidden fixed top-0 left-0 right-0 z-50 bg-background/40 backdrop-blur-xl border-b border-white/10 dark:border-white/5 h-14 flex items-center px-4 justify-between">
         <div className="flex items-center gap-2">
           <div className="w-7 h-7 bg-primary rounded-lg flex items-center justify-center text-primary-foreground font-bold">
             X
@@ -120,7 +120,7 @@ export function AdminSidebar({ currentPath }: SidebarProps) {
       {/* 移动端侧边栏 */}
       <aside
         className={cn(
-          "md:hidden fixed top-0 left-0 h-full w-64 bg-card z-50 flex flex-col transform transition-transform duration-300 ease-in-out",
+          "md:hidden fixed top-0 left-0 h-full w-64 bg-background/90 backdrop-blur-xl z-50 flex flex-col transform transition-transform duration-300 ease-in-out",
           isOpen ? "translate-x-0" : "-translate-x-full"
         )}
       >
@@ -128,7 +128,7 @@ export function AdminSidebar({ currentPath }: SidebarProps) {
       </aside>
 
       {/* 桌面端侧边栏 */}
-      <aside className="hidden md:flex w-64 bg-card border-r border-border flex-col h-screen sticky top-0">
+      <aside className="hidden md:flex w-64 h-full bg-transparent flex-col relative overflow-hidden">
         <SidebarContent />
       </aside>
     </>
