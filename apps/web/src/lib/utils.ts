@@ -67,16 +67,18 @@ export function generateRandomAddress(domain: string): string {
 // 参考: Apple OTP标准, Gmail, Mailosaur等成熟方案
 // 改进: 关键词策略 + 结构化候选评分兜底，提升多语言场景召回率
 export function extractVerificationCode(text: string | null, html: string | null): string | null {
-  const content = text || (
-    html
-      ? html
-          .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-          .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-          .replace(/<[^>]*>/g, ' ')
-          .replace(/&nbsp;/gi, ' ')
-          .replace(/&amp;/gi, '&')
-      : ''
-  )
+  const normalizeHtmlLikeContent = (value: string): string => value
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(?:p|div|tr|td|table|h[1-6])>/gi, '\n')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+
+  const content = text ? normalizeHtmlLikeContent(text) : (html ? normalizeHtmlLikeContent(html) : '')
   if (!content) return null
 
   // 策略 0: Apple OTP 标准格式（最高优先级）

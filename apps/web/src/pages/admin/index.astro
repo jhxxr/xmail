@@ -3,8 +3,20 @@ import AdminLayout from "../../layouts/AdminLayout.astro"
 import { createDB, getStats, getAdminById, getMailDomain } from "database"
 import { verifyToken } from "../../lib/auth"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
-import { Button } from "../../components/ui/button"
-import { Users, Mail, FileText, Settings } from "lucide-react"
+import { buttonVariants } from "../../components/ui/button"
+import {
+  Users,
+  Mail,
+  FileText,
+  ArrowRight,
+  Sparkles,
+  Globe2,
+  Inbox,
+  UserPlus,
+  ShieldCheck,
+  CircleAlert,
+  BarChart3,
+} from "lucide-react"
 
 const db = createDB(Astro.locals.runtime.env.DB)
 const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
@@ -24,94 +36,426 @@ if (!admin) {
 }
 
 const [stats, mailDomain] = await Promise.all([getStats(db), getMailDomain(db)])
+
+const totalUsers = Math.max(stats.totalUsers, 0)
+const totalMailboxes = Math.max(stats.totalMailboxes, 0)
+const totalEmails = Math.max(stats.totalEmails, 0)
+const unassignedMailboxes = Math.min(Math.max(stats.unassignedMailboxes, 0), totalMailboxes)
+const assignedMailboxes = Math.max(totalMailboxes - unassignedMailboxes, 0)
+
+const assignmentRate = totalMailboxes > 0 ? assignedMailboxes / totalMailboxes : 0
+const unassignedRate = totalMailboxes > 0 ? unassignedMailboxes / totalMailboxes : 0
+const mailboxesPerUser = totalUsers > 0 ? totalMailboxes / totalUsers : 0
+const emailsPerMailbox = totalMailboxes > 0 ? totalEmails / totalMailboxes : 0
+const emailsPerUser = totalUsers > 0 ? totalEmails / totalUsers : 0
+
+const domainLabel = mailDomain || "未设置"
+const domainConfigured = Boolean(mailDomain) && mailDomain !== "example.com"
+const domainStatus = !mailDomain ? "未设置" : mailDomain === "example.com" ? "待替换" : "已配置"
+const domainHint = !mailDomain
+  ? "当前还没有默认域名，建议先到系统设置中补齐。"
+  : mailDomain === "example.com"
+    ? "当前仍是示例域名，占位可见但不适合正式接收邮件。"
+    : "后台默认域名已填写，仍需自行确认 Cloudflare Email Routing 是否已指向 Worker。"
+
+const formatNumber = (value: number) => new Intl.NumberFormat("zh-CN").format(value)
+const formatPercent = (value: number) => `${Math.round(value * 100)}%`
+const formatAverage = (value: number) => {
+  if (!Number.isFinite(value) || value <= 0) return "0"
+  if (value >= 100) return formatNumber(Math.round(value))
+  return value.toFixed(value >= 10 ? 1 : 2).replace(/\.?0+$/, "")
+}
 ---
 
 <AdminLayout title="概览">
-  <div class="space-y-6 md:space-y-8">
-    <div class="flex justify-between items-center">
-      <div>
-        <h1 class="text-2xl md:text-3xl font-bold tracking-tight">概览</h1>
-        <p class="text-muted-foreground mt-1 md:mt-2 text-sm">欢迎回来, {admin.username}</p>
-      </div>
+  <div class="space-y-8 md:space-y-10">
+    <Card className="relative overflow-hidden border-white/15">
+      <div class="absolute inset-0 bg-gradient-to-br from-primary/20 via-background/40 to-accent/20"></div>
+      <div class="absolute -left-16 top-0 h-40 w-40 rounded-full bg-primary/20 blur-3xl"></div>
+      <div class="absolute -right-10 bottom-0 h-32 w-32 rounded-full bg-accent/25 blur-3xl"></div>
+
+      <CardContent className="relative p-0">
+        <div class="grid gap-8 xl:grid-cols-[minmax(0,1.08fr)_minmax(0,0.92fr)] 2xl:gap-12">
+          <div class="space-y-7 p-6 md:p-8 xl:p-10 2xl:space-y-8 2xl:p-12">
+            <div class="flex flex-wrap items-center gap-3.5 text-xs font-medium">
+              <span class="inline-flex items-center gap-2 rounded-full border border-white/15 bg-background/70 px-3 py-1.5 text-foreground backdrop-blur-md">
+                <Sparkles className="h-3.5 w-3.5 text-primary" />
+                管理后台总览
+              </span>
+              <span
+                class={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 backdrop-blur-md ${
+                  domainConfigured
+                    ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                    : "border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                }`}
+              >
+                {domainConfigured ? <ShieldCheck className="h-3.5 w-3.5" /> : <CircleAlert className="h-3.5 w-3.5" />}
+                域名状态：{domainStatus}
+              </span>
+            </div>
+
+            <div class="max-w-2xl space-y-4">
+              <h1 class="text-3xl font-semibold tracking-tight sm:text-4xl xl:text-[3.25rem] xl:leading-tight">欢迎回来，{admin.username}</h1>
+              <p class="max-w-xl text-sm leading-7 text-muted-foreground md:text-base md:leading-7">
+                这里汇总了当前后台最关键的资源规模、邮箱分配情况和默认域名状态，方便你更快判断接下来该补用户、补邮箱，还是先完善收件配置。
+              </p>
+            </div>
+
+            <div class="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
+              <div class="rounded-3xl border border-white/10 bg-background/65 p-5 md:p-6 backdrop-blur-md">
+                <p class="text-xs uppercase tracking-[0.24em] text-muted-foreground">已分配邮箱</p>
+                <p class="mt-4 text-2xl font-semibold">{formatNumber(assignedMailboxes)}</p>
+                <p class="mt-3 text-sm leading-6 text-muted-foreground">当前占邮箱总量 {formatPercent(assignmentRate)}</p>
+              </div>
+              <div class="rounded-3xl border border-white/10 bg-background/65 p-5 md:p-6 backdrop-blur-md">
+                <p class="text-xs uppercase tracking-[0.24em] text-muted-foreground">待处理邮箱</p>
+                <p class="mt-4 text-2xl font-semibold">{formatNumber(unassignedMailboxes)}</p>
+                <p class="mt-3 text-sm leading-6 text-muted-foreground">未分配占比 {formatPercent(unassignedRate)}</p>
+              </div>
+              <div class="rounded-3xl border border-white/10 bg-background/65 p-5 md:p-6 backdrop-blur-md min-w-0 md:col-span-2 2xl:col-span-1">
+                <p class="text-xs uppercase tracking-[0.24em] text-muted-foreground">默认域名</p>
+                <p class="mt-4 truncate text-2xl font-semibold" title={domainLabel}>{domainLabel}</p>
+                <p class="mt-3 text-sm leading-6 text-muted-foreground">{domainConfigured ? "后台已填写正式域名" : "建议尽快补齐或替换"}</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="p-6 pt-0 md:p-8 md:pt-0 xl:px-10 xl:pb-10 xl:pl-0 xl:pt-10 2xl:p-12 2xl:pl-0">
+            <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-1">
+              <div class="rounded-3xl border border-white/10 bg-background/60 p-5 md:p-6 backdrop-blur-md">
+                <div class="flex items-center justify-between gap-3">
+                  <div>
+                    <p class="text-sm font-medium">邮箱分配覆盖</p>
+                    <p class="mt-2 text-3xl font-semibold">{formatPercent(assignmentRate)}</p>
+                  </div>
+                  <div class="rounded-full bg-primary/10 p-3 text-primary">
+                    <Mail className="h-5 w-5" />
+                  </div>
+                </div>
+                <div class="mt-5 h-2 overflow-hidden rounded-full bg-white/10">
+                  <div class="h-full rounded-full bg-primary" style={`width: ${formatPercent(assignmentRate)}`}></div>
+                </div>
+                <p class="mt-4 text-sm leading-6 text-muted-foreground">{formatNumber(assignedMailboxes)} / {formatNumber(totalMailboxes)} 个邮箱已完成归属</p>
+              </div>
+
+              <div class="rounded-3xl border border-white/10 bg-background/60 p-5 md:p-6 backdrop-blur-md">
+                <div class="flex items-center justify-between gap-3">
+                  <div>
+                    <p class="text-sm font-medium">人均邮箱</p>
+                    <p class="mt-2 text-3xl font-semibold">{formatAverage(mailboxesPerUser)}</p>
+                  </div>
+                  <div class="rounded-full bg-primary/10 p-3 text-primary">
+                    <Users className="h-5 w-5" />
+                  </div>
+                </div>
+                <p class="mt-5 text-sm leading-6 text-muted-foreground">基于当前 {formatNumber(totalUsers)} 位用户与 {formatNumber(totalMailboxes)} 个邮箱计算</p>
+              </div>
+
+              <div class="rounded-3xl border border-white/10 bg-background/60 p-5 md:col-span-2 md:p-6 backdrop-blur-md xl:col-span-1">
+                <div class="flex items-center justify-between gap-3">
+                  <div>
+                    <p class="text-sm font-medium">收件密度</p>
+                    <p class="mt-2 text-3xl font-semibold">{formatAverage(emailsPerMailbox)}</p>
+                  </div>
+                  <div class="rounded-full bg-primary/10 p-3 text-primary">
+                    <BarChart3 className="h-5 w-5" />
+                  </div>
+                </div>
+                <p class="mt-5 text-sm leading-6 text-muted-foreground">平均每个邮箱累计约 {formatAverage(emailsPerMailbox)} 封邮件，每位用户约 {formatAverage(emailsPerUser)} 封</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+
+    <div class="grid gap-5 grid-cols-1 md:grid-cols-2 2xl:grid-cols-4">
+      <Card className="overflow-hidden border-white/10">
+        <CardHeader className="space-y-5 p-6 pb-4 md:p-7 md:pb-4">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <p class="text-sm font-medium text-muted-foreground">用户总数</p>
+              <CardTitle className="mt-2 text-3xl">{formatNumber(totalUsers)}</CardTitle>
+            </div>
+            <div class="rounded-2xl bg-primary/10 p-3 text-primary">
+              <Users className="h-5 w-5" />
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4 px-6 pb-6 pt-0 md:px-7 md:pb-7">
+          <p class="text-sm leading-6 text-muted-foreground">后台当前可管理的用户账号规模。</p>
+          <div class="rounded-2xl border border-white/10 bg-background/60 px-4 py-4 text-sm leading-6 text-muted-foreground">
+            {totalUsers > 0 ? `按当前资源计算，平均每位用户约 ${formatAverage(mailboxesPerUser)} 个邮箱。` : "创建用户后即可开始分配邮箱资源。"}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="overflow-hidden border-white/10">
+        <CardHeader className="space-y-5 p-6 pb-4 md:p-7 md:pb-4">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <p class="text-sm font-medium text-muted-foreground">邮箱总数</p>
+              <CardTitle className="mt-2 text-3xl">{formatNumber(totalMailboxes)}</CardTitle>
+            </div>
+            <div class="rounded-2xl bg-primary/10 p-3 text-primary">
+              <Mail className="h-5 w-5" />
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4 px-6 pb-6 pt-0 md:px-7 md:pb-7">
+          <p class="text-sm leading-6 text-muted-foreground">包括已分配和暂未归属的全部邮箱资源。</p>
+          <div class="flex items-center justify-between rounded-2xl border border-white/10 bg-background/60 px-4 py-4 text-sm">
+            <span class="text-muted-foreground">未分配</span>
+            <span class="font-medium">{formatNumber(unassignedMailboxes)}</span>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="overflow-hidden border-white/10">
+        <CardHeader className="space-y-5 p-6 pb-4 md:p-7 md:pb-4">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <p class="text-sm font-medium text-muted-foreground">邮件总数</p>
+              <CardTitle className="mt-2 text-3xl">{formatNumber(totalEmails)}</CardTitle>
+            </div>
+            <div class="rounded-2xl bg-primary/10 p-3 text-primary">
+              <FileText className="h-5 w-5" />
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4 px-6 pb-6 pt-0 md:px-7 md:pb-7">
+          <p class="text-sm leading-6 text-muted-foreground">已接收并进入系统的全部邮件累计。</p>
+          <div class="rounded-2xl border border-white/10 bg-background/60 px-4 py-4 text-sm leading-6 text-muted-foreground">
+            平均每个邮箱约 {formatAverage(emailsPerMailbox)} 封邮件。
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="overflow-hidden border-white/10">
+        <CardHeader className="space-y-5 p-6 pb-4 md:p-7 md:pb-4">
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <p class="text-sm font-medium text-muted-foreground">默认域名</p>
+              <CardTitle className="mt-2 truncate text-3xl" title={domainLabel}>{domainLabel}</CardTitle>
+            </div>
+            <div class="rounded-2xl bg-primary/10 p-3 text-primary">
+              <Globe2 className="h-5 w-5" />
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4 px-6 pb-6 pt-0 md:px-7 md:pb-7">
+          <p class="text-sm leading-6 text-muted-foreground">用于后台展示和邮箱创建时的默认域名。</p>
+          <div class={`rounded-2xl border px-4 py-4 text-sm leading-6 ${domainConfigured ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : "border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-300"}`}>
+            当前状态：{domainStatus}
+          </div>
+        </CardContent>
+      </Card>
     </div>
 
-    <div class="grid gap-4 grid-cols-2 lg:grid-cols-4">
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-          <CardTitle className="text-sm font-medium">用户总数</CardTitle>
-          <Users className="h-4 w-4 text-muted-foreground" />
+    <div class="grid gap-6 2xl:grid-cols-[minmax(0,1.22fr)_minmax(0,0.88fr)] 2xl:gap-7">
+      <Card className="border-white/10">
+        <CardHeader className="p-6 pb-5 md:p-7 md:pb-5">
+          <div class="flex items-center justify-between gap-3">
+            <div class="max-w-2xl">
+              <CardTitle className="text-xl">运营洞察</CardTitle>
+              <p class="mt-3 text-sm leading-6 text-muted-foreground">只基于当前已加载的数据，帮助你判断资源结构是否均衡。</p>
+            </div>
+            <div class="rounded-2xl bg-primary/10 p-3 text-primary">
+              <BarChart3 className="h-5 w-5" />
+            </div>
+          </div>
         </CardHeader>
-        <CardContent>
-          <div class="text-2xl font-bold">{stats.totalUsers}</div>
-          <p class="text-xs text-muted-foreground">系统注册用户</p>
+        <CardContent className="grid gap-5 px-6 pb-6 pt-0 md:grid-cols-2 md:px-7 md:pb-7 2xl:grid-cols-3">
+          <div class="rounded-3xl border border-white/10 bg-background/60 p-5 md:p-6">
+            <p class="text-sm font-medium">邮箱分配结构</p>
+            <div class="mt-5 space-y-4 text-sm">
+              <div class="flex items-center justify-between gap-3">
+                <span class="text-muted-foreground">已分配</span>
+                <span class="font-medium">{formatNumber(assignedMailboxes)}</span>
+              </div>
+              <div class="flex items-center justify-between gap-3">
+                <span class="text-muted-foreground">未分配</span>
+                <span class="font-medium">{formatNumber(unassignedMailboxes)}</span>
+              </div>
+              <div class="h-2 overflow-hidden rounded-full bg-white/10">
+                <div class="h-full rounded-full bg-primary" style={`width: ${formatPercent(assignmentRate)}`}></div>
+              </div>
+              <p class="leading-6 text-muted-foreground">已完成归属的邮箱占比为 {formatPercent(assignmentRate)}。</p>
+            </div>
+          </div>
+
+          <div class="rounded-3xl border border-white/10 bg-background/60 p-5 md:p-6">
+            <p class="text-sm font-medium">用户承载关系</p>
+            <div class="mt-5 space-y-4 text-sm">
+              <div class="flex items-center justify-between gap-3">
+                <span class="text-muted-foreground">用户数</span>
+                <span class="font-medium">{formatNumber(totalUsers)}</span>
+              </div>
+              <div class="flex items-center justify-between gap-3">
+                <span class="text-muted-foreground">邮箱数</span>
+                <span class="font-medium">{formatNumber(totalMailboxes)}</span>
+              </div>
+              <div class="rounded-2xl bg-background/70 px-4 py-3 text-base font-medium">
+                平均每位用户约 {formatAverage(mailboxesPerUser)} 个邮箱
+              </div>
+              <p class="leading-6 text-muted-foreground">该指标用于快速观察用户和邮箱资源的配置密度。</p>
+            </div>
+          </div>
+
+          <div class="rounded-3xl border border-white/10 bg-background/60 p-5 md:p-6 md:col-span-2 2xl:col-span-1">
+            <p class="text-sm font-medium">收件负载参考</p>
+            <div class="mt-5 space-y-4 text-sm">
+              <div class="flex items-center justify-between gap-3">
+                <span class="text-muted-foreground">邮件总数</span>
+                <span class="font-medium">{formatNumber(totalEmails)}</span>
+              </div>
+              <div class="flex items-center justify-between gap-3">
+                <span class="text-muted-foreground">每邮箱平均</span>
+                <span class="font-medium">{formatAverage(emailsPerMailbox)}</span>
+              </div>
+              <div class="rounded-2xl bg-background/70 px-4 py-3 text-base font-medium">
+                每位用户约 {formatAverage(emailsPerUser)} 封邮件
+              </div>
+              <p class="leading-6 text-muted-foreground">适合用来判断是否需要去邮件管理页做进一步排查。</p>
+            </div>
+          </div>
         </CardContent>
       </Card>
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-          <CardTitle className="text-sm font-medium">邮箱总数</CardTitle>
-          <Mail className="h-4 w-4 text-muted-foreground" />
+
+      <Card className="border-white/10">
+        <CardHeader className="p-6 pb-5 md:p-7 md:pb-5">
+          <div class="flex items-center justify-between gap-3">
+            <div class="max-w-xl">
+              <CardTitle className="text-xl">域名就绪度</CardTitle>
+              <p class="mt-3 text-sm leading-6 text-muted-foreground">这里仅判断后台默认域名是否已填写，不会假设路由已完成。</p>
+            </div>
+            <div class={`rounded-2xl p-3 ${domainConfigured ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-300" : "bg-amber-500/10 text-amber-600 dark:text-amber-300"}`}>
+              {domainConfigured ? <ShieldCheck className="h-5 w-5" /> : <CircleAlert className="h-5 w-5" />}
+            </div>
+          </div>
         </CardHeader>
-        <CardContent>
-          <div class="text-2xl font-bold">{stats.totalMailboxes}</div>
-          <p class="text-xs text-muted-foreground">未分配: {stats.unassignedMailboxes}</p>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-          <CardTitle className="text-sm font-medium">邮件总数</CardTitle>
-          <FileText className="h-4 w-4 text-muted-foreground" />
-        </CardHeader>
-        <CardContent>
-          <div class="text-2xl font-bold">{stats.totalEmails}</div>
-          <p class="text-xs text-muted-foreground">已接收邮件</p>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-          <CardTitle className="text-sm font-medium">默认域名</CardTitle>
-          <Settings className="h-4 w-4 text-muted-foreground" />
-        </CardHeader>
-        <CardContent>
-          <div class="text-2xl font-bold truncate" title={mailDomain}>{mailDomain || "未设置"}</div>
-          {mailDomain === "example.com" && (
-            <a href="/admin/settings" class="text-xs text-primary hover:underline">
-              去设置
-            </a>
-          )}
+        <CardContent className="space-y-5 px-6 pb-6 pt-0 md:px-7 md:pb-7">
+          <div class={`rounded-3xl border px-5 py-6 md:px-6 ${domainConfigured ? "border-emerald-500/20 bg-emerald-500/10" : "border-amber-500/20 bg-amber-500/10"}`}>
+            <p class="text-sm font-medium text-muted-foreground">当前默认域名</p>
+            <p class="mt-4 break-all text-2xl font-semibold">{domainLabel}</p>
+            <p class="mt-4 text-sm leading-6 text-muted-foreground">{domainHint}</p>
+          </div>
+
+          <div class="space-y-3 text-sm">
+            <div class="flex items-start justify-between gap-4 rounded-2xl border border-white/10 bg-background/60 px-4 py-4">
+              <div>
+                <p class="font-medium">后台域名配置</p>
+                <p class="mt-1 leading-6 text-muted-foreground">检查默认域名是否为空或仍是示例值。</p>
+              </div>
+              <span class={`shrink-0 rounded-full px-3 py-1 text-xs font-medium ${domainConfigured ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : "bg-amber-500/10 text-amber-700 dark:text-amber-300"}`}>
+                {domainConfigured ? "已填写" : "需处理"}
+              </span>
+            </div>
+
+            <div class="flex items-start justify-between gap-4 rounded-2xl border border-white/10 bg-background/60 px-4 py-4">
+              <div>
+                <p class="font-medium">Cloudflare 路由确认</p>
+                <p class="mt-1 leading-6 text-muted-foreground">该页面无法校验 Email Routing，只能提醒你继续人工确认。</p>
+              </div>
+              <span class="shrink-0 rounded-full bg-background px-3 py-1 text-xs font-medium text-muted-foreground border border-white/10">
+                待确认
+              </span>
+            </div>
+          </div>
+
+          <a href="/admin/settings" class={buttonVariants({ variant: "outline", className: "w-full justify-between" })}>
+              前往系统设置
+              <ArrowRight className="h-4 w-4" />
+          </a>
         </CardContent>
       </Card>
     </div>
 
-    <Card>
-      <CardHeader>
-        <CardTitle>快捷操作</CardTitle>
+    <Card className="border-white/10">
+      <CardHeader className="p-6 pb-5 md:p-7 md:pb-5">
+        <div class="flex flex-col gap-3 sm:gap-4 xl:flex-row xl:items-end xl:justify-between">
+          <div class="max-w-2xl">
+            <CardTitle className="text-xl">快捷操作</CardTitle>
+            <p class="mt-3 text-sm leading-6 text-muted-foreground">把最常用的管理入口整理成更容易扫读和点击的操作面板。</p>
+          </div>
+          <p class="max-w-xl text-sm leading-6 text-muted-foreground">优先把注意力放在待分配邮箱和域名设置上，会更快改善整体可用性。</p>
+        </div>
       </CardHeader>
-      <CardContent>
-        <div class="flex gap-4 flex-wrap">
-          <a href="/admin/users?action=create">
-            <Button>
-              <Users className="mr-2 h-4 w-4" />
-              创建用户
-            </Button>
-          </a>
-          <a href="/admin/mailboxes">
-            <Button variant="secondary">
-              <Mail className="mr-2 h-4 w-4" />
-              批量生成邮箱
-            </Button>
-          </a>
-          <a href="/admin/mailboxes?filter=unassigned">
-            <Button variant="outline">
-              <Mail className="mr-2 h-4 w-4" />
-              未分配邮箱
-            </Button>
-          </a>
-          <a href="/admin/emails">
-            <Button variant="ghost">
-              <FileText className="mr-2 h-4 w-4" />
-              查看邮件
-            </Button>
-          </a>
+      <CardContent className="grid gap-5 px-6 pb-6 pt-0 md:grid-cols-2 md:px-7 md:pb-7 2xl:grid-cols-4">
+        <div class="flex h-full flex-col rounded-3xl border border-white/10 bg-background/60 p-5 md:p-6">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <p class="text-base font-semibold">创建用户</p>
+              <p class="mt-3 text-sm leading-6 text-muted-foreground">新增账号并发放访问入口，为后续邮箱分配做准备。</p>
+            </div>
+            <div class="rounded-2xl bg-primary/10 p-3 text-primary">
+              <UserPlus className="h-5 w-5" />
+            </div>
+          </div>
+          <p class="mt-5 text-sm leading-6 text-muted-foreground">当前系统已有 {formatNumber(totalUsers)} 位用户。</p>
+          <div class="mt-6">
+            <a href="/admin/users?action=create" class={buttonVariants({ className: "w-full justify-between" })}>
+                进入创建页
+                <ArrowRight className="h-4 w-4" />
+            </a>
+          </div>
+        </div>
+
+        <div class="flex h-full flex-col rounded-3xl border border-white/10 bg-background/60 p-5 md:p-6">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <p class="text-base font-semibold">批量生成邮箱</p>
+              <p class="mt-3 text-sm leading-6 text-muted-foreground">快速补充邮箱池，适合在资源不足前提前扩容。</p>
+            </div>
+            <div class="rounded-2xl bg-primary/10 p-3 text-primary">
+              <Mail className="h-5 w-5" />
+            </div>
+          </div>
+          <p class="mt-5 text-sm leading-6 text-muted-foreground">当前共维护 {formatNumber(totalMailboxes)} 个邮箱资源。</p>
+          <div class="mt-6">
+            <a href="/admin/mailboxes" class={buttonVariants({ variant: "secondary", className: "w-full justify-between" })}>
+                打开邮箱管理
+                <ArrowRight className="h-4 w-4" />
+            </a>
+          </div>
+        </div>
+
+        <div class="flex h-full flex-col rounded-3xl border border-white/10 bg-background/60 p-5 md:p-6">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <p class="text-base font-semibold">未分配邮箱</p>
+              <p class="mt-3 text-sm leading-6 text-muted-foreground">直接查看待处理资源，优先完成归属会让后台更清晰。</p>
+            </div>
+            <div class="rounded-2xl bg-primary/10 p-3 text-primary">
+              <Inbox className="h-5 w-5" />
+            </div>
+          </div>
+          <p class="mt-5 text-sm leading-6 text-muted-foreground">当前仍有 {formatNumber(unassignedMailboxes)} 个邮箱未分配。</p>
+          <div class="mt-6">
+            <a href="/admin/mailboxes?filter=unassigned" class={buttonVariants({ variant: "outline", className: "w-full justify-between" })}>
+                查看待处理邮箱
+                <ArrowRight className="h-4 w-4" />
+            </a>
+          </div>
+        </div>
+
+        <div class="flex h-full flex-col rounded-3xl border border-white/10 bg-background/60 p-5 md:p-6">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <p class="text-base font-semibold">查看邮件</p>
+              <p class="mt-3 text-sm leading-6 text-muted-foreground">进入总收件视图，排查收件结果、验证码和历史邮件。</p>
+            </div>
+            <div class="rounded-2xl bg-primary/10 p-3 text-primary">
+              <FileText className="h-5 w-5" />
+            </div>
+          </div>
+          <p class="mt-5 text-sm leading-6 text-muted-foreground">系统内已累计接收 {formatNumber(totalEmails)} 封邮件。</p>
+          <div class="mt-6">
+            <a href="/admin/emails" class={buttonVariants({ variant: "ghost", className: "w-full justify-between border border-white/10 bg-background/70 hover:bg-accent" })}>
+                打开邮件管理
+                <ArrowRight className="h-4 w-4" />
+            </a>
+          </div>
         </div>
       </CardContent>
     </Card>

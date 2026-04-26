@@ -3,6 +3,7 @@ import Layout from "../../layouts/Layout.astro"
 import { createDB, getEmail, getMailbox, markEmailAsRead, listMailboxes, getUserByToken, getUserExternalAccounts, checkUserHasAccessToMailbox } from "database"
 import { verifyToken } from "../../lib/auth"
 import { formatDate } from "../../lib/utils"
+import { sanitizeEmailHtml } from "../../lib/email-html"
 
 const db = createDB(Astro.locals.runtime.env.DB)
 const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
@@ -127,11 +128,11 @@ function sanitizeHtml(html: string): string {
         <div class="px-4 sm:px-6 py-4 overflow-x-auto">
           {email.html ? (
             <div
-              class="prose prose-sm sm:prose max-w-none"
-              set:html={sanitizeHtml(email.html)}
+              class="mail-content prose prose-sm sm:prose max-w-none"
+              set:html={sanitizeEmailHtml(email.html)}
             />
           ) : email.text ? (
-            <pre class="whitespace-pre-wrap font-sans text-gray-700 text-sm overflow-x-auto">{email.text}</pre>
+            <pre class="mail-content whitespace-pre-wrap font-sans text-gray-700 text-sm overflow-x-auto">{email.text}</pre>
           ) : (
             <p class="text-gray-500">(无内容)</p>
           )}
@@ -147,6 +148,26 @@ function sanitizeHtml(html: string): string {
     word-wrap: break-word;
     overflow-wrap: break-word;
     min-width: 0;
+  }
+
+  .mail-content,
+  .mail-content * {
+    -webkit-user-select: text !important;
+    user-select: text !important;
+    -webkit-touch-callout: default !important;
+    pointer-events: auto !important;
+  }
+
+  .mail-content::selection,
+  .mail-content *::selection {
+    background: hsl(var(--primary) / 0.28) !important;
+    color: inherit !important;
+  }
+
+  .mail-content::-moz-selection,
+  .mail-content *::-moz-selection {
+    background: hsl(var(--primary) / 0.28) !important;
+    color: inherit !important;
   }
 
   .prose img {

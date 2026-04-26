@@ -99,18 +99,27 @@ export function MailboxInfo({ address, stats, className, mailboxes = [] }: Mailb
         <div className="group relative py-1">
           {hasMultiple ? (
             <div className="relative">
-              <button
-                className="w-full flex items-center justify-between gap-2 rounded-md -ml-2 px-2 py-1 hover:bg-muted/50 transition-colors cursor-pointer"
-                onClick={() => setShowDropdown(!showDropdown)}
-              >
-                <div className="text-sm font-bold break-all font-mono tracking-tight text-primary leading-tight text-left">
+              <div className="flex items-start gap-2 rounded-md -ml-2 px-2 py-1 hover:bg-muted/50 transition-colors">
+                <div className="min-w-0 flex-1 text-sm font-bold break-all font-mono tracking-tight text-primary leading-tight text-left cursor-text select-text">
                   {address}
                 </div>
-                <ChevronDown className={cn(
-                  "h-4 w-4 text-muted-foreground flex-shrink-0 transition-transform",
-                  showDropdown && "rotate-180"
-                )} />
-              </button>
+                <button
+                  type="button"
+                  className="mt-0.5 inline-flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background/80 hover:text-foreground"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    setShowDropdown(!showDropdown)
+                  }}
+                  aria-label="切换账号"
+                  aria-expanded={showDropdown}
+                  aria-haspopup="listbox"
+                >
+                  <ChevronDown className={cn(
+                    "h-4 w-4 transition-transform",
+                    showDropdown && "rotate-180"
+                  )} />
+                </button>
+              </div>
 
               {/* 下拉菜单 */}
               {showDropdown && (
@@ -149,7 +158,7 @@ export function MailboxInfo({ address, stats, className, mailboxes = [] }: Mailb
               )}
             </div>
           ) : (
-            <div className="text-sm font-bold break-all font-mono tracking-tight text-primary leading-tight">
+            <div className="text-sm font-bold break-all font-mono tracking-tight text-primary leading-tight cursor-text select-text">
               {address}
             </div>
           )}

@@ -345,10 +345,15 @@ if (selectedMailbox) {
                       || extractVerificationCode(email.subject, null)
                     return (
                       <div class={`relative ${!email.isRead ? "bg-primary/5 border-l-2 border-l-primary" : "border-l-2 border-l-transparent"}`}>
-                        <div class="block p-4 hover:bg-muted/40 transition-all group relative">
-                          <a href={`/mail/${email.id}`} class="absolute inset-0 z-0" aria-label="查看邮件详情"></a>
-                          <div class="flex justify-between items-start gap-4 relative z-10 pointer-events-none">
-                            <div class="flex-1 min-w-0">
+                        <div
+                          class="block p-4 hover:bg-muted/40 transition-all group relative cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                          data-row-link={`/mail/${email.id}`}
+                          tabindex="0"
+                          role="link"
+                          aria-label="查看邮件详情"
+                        >
+                          <div class="flex justify-between items-start gap-4 relative z-10">
+                            <div class="flex-1 min-w-0 cursor-text select-text">
                               <div class="flex items-center gap-2 mb-1">
                                 <form method="POST" class="pointer-events-auto relative z-20 -ml-1 mr-1">
                                   <input type="hidden" name="action" value="toggle_star" />
@@ -391,7 +396,7 @@ if (selectedMailbox) {
                                 )}
                               </div>
                             </div>
-                            <div class="hidden sm:flex flex-col items-end gap-2">
+                            <div class="hidden sm:flex flex-col items-end gap-2 cursor-text select-text">
                               <span class="text-xs text-muted-foreground whitespace-nowrap">{formatDate(email.createdAt)}</span>
                               <ChevronRight className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
                             </div>
@@ -459,10 +464,15 @@ if (selectedMailbox) {
                     return (
                       <div class={`relative glass-card rounded-xl overflow-hidden group animate-fade-in-up`} style={`animation-delay: ${index * 0.05 + 0.2}s; animation-fill-mode: both;`}>
                         <div class={`absolute left-0 top-0 bottom-0 w-1 transition-colors ${!email.isRead ? "bg-primary" : "bg-transparent group-hover:bg-primary/30"}`}></div>
-                        <div class="block px-6 py-4 transition-all relative">
-                          <a href={`/mail/${email.id}`} class="absolute inset-0 z-0" aria-label="查看邮件详情"></a>
-                          <div class="flex justify-between items-start gap-4 relative z-10 pointer-events-none">
-                            <div class="flex-1 min-w-0">
+                        <div
+                          class="block px-6 py-4 transition-all relative cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                          data-row-link={`/mail/${email.id}`}
+                          tabindex="0"
+                          role="link"
+                          aria-label="查看邮件详情"
+                        >
+                          <div class="flex justify-between items-start gap-4 relative z-10">
+                            <div class="flex-1 min-w-0 cursor-text select-text">
                               <div class="flex items-center gap-2 mb-1">
                                 <form method="POST" class="pointer-events-auto relative z-20 -ml-1 mr-1">
                                   <input type="hidden" name="action" value="toggle_star" />
@@ -505,7 +515,7 @@ if (selectedMailbox) {
                                 )}
                               </div>
                             </div>
-                            <div class="hidden sm:flex flex-col items-end gap-2">
+                            <div class="hidden sm:flex flex-col items-end gap-2 cursor-text select-text">
                               <span class="text-xs text-muted-foreground whitespace-nowrap">{formatDate(email.createdAt)}</span>
                               <ChevronRight className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
                             </div>

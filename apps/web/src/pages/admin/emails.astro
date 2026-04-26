@@ -3,6 +3,7 @@ import AdminLayout from "../../layouts/AdminLayout.astro"
 import { createDB, getAdminById, listAllEmails, getEmailsByMailbox, getEmail, deleteEmail, markEmailAsRead, listMailboxes, toggleEmailStar } from "database"
 import { verifyToken } from "../../lib/auth"
 import { formatDate, extractPreview, extractVerificationCode } from "../../lib/utils"
+import { sanitizeEmailHtml } from "../../lib/email-html"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
 import { Button } from "../../components/ui/button"
 import { Badge } from "../../components/ui/badge"
@@ -119,12 +120,12 @@ function sanitizeHtml(html: string): string {
                 <div class="flex items-center gap-2">
                   <User className="h-4 w-4" />
                   <span class="font-medium text-foreground">发件人:</span>
-                  <span class="truncate">{selectedEmail.fromName} &lt;{selectedEmail.fromAddress}&gt;</span>
+                  <span class="min-w-0 break-all select-text">{selectedEmail.fromName} &lt;{selectedEmail.fromAddress}&gt;</span>
                 </div>
                 <div class="flex items-center gap-2">
                   <Mail className="h-4 w-4" />
                   <span class="font-medium text-foreground">收件人:</span>
-                  <span class="truncate">{selectedEmail.messageTo}</span>
+                  <span class="min-w-0 break-all select-text">{selectedEmail.messageTo}</span>
                 </div>
                 <div class="flex items-center gap-2">
                   <Clock className="h-4 w-4" />
@@ -153,9 +154,9 @@ function sanitizeHtml(html: string): string {
         </CardHeader>
         <CardContent className="p-6 min-h-[400px]">
           {selectedEmail.html ? (
-            <div class="prose prose-sm max-w-none dark:prose-invert" set:html={sanitizeHtml(selectedEmail.html)} />
+            <div class="mail-content prose prose-sm max-w-none dark:prose-invert" set:html={sanitizeEmailHtml(selectedEmail.html)} />
           ) : selectedEmail.text ? (
-            <pre class="whitespace-pre-wrap font-sans text-sm">{selectedEmail.text}</pre>
+            <pre class="mail-content whitespace-pre-wrap font-sans text-sm">{selectedEmail.text}</pre>
           ) : (
             <p class="text-muted-foreground italic">(无内容)</p>
           )}
@@ -173,14 +174,15 @@ function sanitizeHtml(html: string): string {
                 const verificationCode = extractVerificationCode(email.text, email.html)
                   || extractVerificationCode(email.subject, null)
                 return (
-                  <div class={`relative group ${!email.isRead ? "bg-blue-50/50 dark:bg-blue-900/10" : ""}`}>
-                    <a
-                      href={`/admin/emails?view=${email.id}${mailboxFilter ? `&mailbox=${encodeURIComponent(mailboxFilter)}` : ""}`}
-                      class="absolute inset-0 z-0"
-                    ></a>
-
-                    <div class="relative z-10 flex justify-between items-start gap-4 p-4 pointer-events-none">
-                      <div class="flex-1 min-w-0 space-y-1">
+                  <div
+                    class={`relative group cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${!email.isRead ? "bg-blue-50/50 dark:bg-blue-900/10" : ""}`}
+                    data-row-link={`/admin/emails?view=${email.id}${mailboxFilter ? `&mailbox=${encodeURIComponent(mailboxFilter)}` : ""}`}
+                    tabindex="0"
+                    role="link"
+                    aria-label="查看邮件详情"
+                  >
+                    <div class="relative z-10 flex justify-between items-start gap-4 p-4">
+                      <div class="flex-1 min-w-0 space-y-1 cursor-text select-text">
                         <div class="flex items-center gap-2 text-sm">
                           <form method="POST" class="pointer-events-auto relative z-20 mr-1">
                             <input type="hidden" name="action" value="toggle_star" />
@@ -201,7 +203,17 @@ function sanitizeHtml(html: string): string {
                           {!email.isRead && <span class="w-2 h-2 bg-primary rounded-full flex-shrink-0" />}
                           <span class="font-medium truncate">{email.fromName || email.fromAddress}</span>
                           <ArrowRight className="h-3 w-3 text-muted-foreground" />
-                          <span class="text-muted-foreground truncate">{email.mailboxAddress}</span>
+                          <span class="font-mono text-muted-foreground truncate select-text">{email.mailboxAddress}</span>
+                          <button
+                            type="button"
+                            class="copy-text-btn pointer-events-auto relative z-20 inline-flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md border border-input bg-background/80 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                            data-copy-text={email.mailboxAddress}
+                            data-copy-success="已复制"
+                            title="复制邮箱"
+                            aria-label="复制邮箱"
+                          >
+                            <Copy className="h-3 w-3" />
+                          </button>
                         </div>
                         <div class="font-medium truncate">{email.subject || "(无主题)"}</div>
                         <div class="flex items-center gap-2">
@@ -219,7 +231,7 @@ function sanitizeHtml(html: string): string {
                           )}
                         </div>
                       </div>
-                      <div class="text-xs text-muted-foreground whitespace-nowrap">{formatDate(email.createdAt)}</div>
+                      <div class="text-xs text-muted-foreground whitespace-nowrap cursor-text select-text">{formatDate(email.createdAt)}</div>
                     </div>
                   </div>
                 )
@@ -265,7 +277,57 @@ function sanitizeHtml(html: string): string {
   })
 </script>
 
+<script>
+  document.addEventListener('click', async (e) => {
+    const target = e.target as HTMLElement
+    const btn = target.closest('.copy-text-btn') as HTMLButtonElement | null
+
+    if (!btn) {
+      return
+    }
+
+    e.preventDefault()
+    e.stopPropagation()
+
+    const text = btn.getAttribute('data-copy-text')
+    if (!text) {
+      return
+    }
+
+    try {
+      await navigator.clipboard.writeText(text)
+      const originalClassName = btn.className
+      btn.classList.add('bg-green-600', 'text-white', 'border-green-600')
+      setTimeout(() => {
+        btn.className = originalClassName
+      }, 1500)
+    } catch (err) {
+      console.error('复制失败:', err)
+    }
+  })
+</script>
+
 <style is:global>
+  .mail-content,
+  .mail-content * {
+    -webkit-user-select: text !important;
+    user-select: text !important;
+    -webkit-touch-callout: default !important;
+    pointer-events: auto !important;
+  }
+
+  .mail-content::selection,
+  .mail-content *::selection {
+    background: hsl(var(--primary) / 0.28) !important;
+    color: inherit !important;
+  }
+
+  .mail-content::-moz-selection,
+  .mail-content *::-moz-selection {
+    background: hsl(var(--primary) / 0.28) !important;
+    color: inherit !important;
+  }
+
   .prose img { max-width: 100%; height: auto; }
   .prose a { color: hsl(var(--primary)); text-decoration: underline; }
 </style>

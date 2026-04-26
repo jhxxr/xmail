@@ -41,6 +41,11 @@ describe('extractVerificationCode', () => {
       expect(extractVerificationCode(text, null)).toBe('603686')
     })
 
+    it('应该从混入HTML样式的OpenAI验证码文本中提取', () => {
+      const text = '<title>Your temporary ChatGPT verification code</title><style>@font-face{font-family:Sohne}.x{width:560px;font-weight:400}</style><p>Enter this temporary verification code to continue:</p><p style=font-family:Menlo;font-size:24px;line-height:28px;background-color:#F3F3F3;color:#5D5D5D;border-radius:16px;padding:28px24px;margin:24px0>867298</p><p>Please ignore this email if this was not you.</p>'
+      expect(extractVerificationCode(text, null)).toBe('867298')
+    })
+
     it('正文包含年份和email字样时仍应提取验证码', () => {
       const text = 'If you were not trying to log in to OpenAI, please reset your password. Your verification code is 824195. Copyright © 2026 OpenAI. This email was sent automatically.'
       expect(extractVerificationCode(text, null)).toBe('824195')

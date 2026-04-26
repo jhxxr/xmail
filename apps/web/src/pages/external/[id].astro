@@ -212,10 +212,15 @@ if (account.linkedMailboxAddress) {
                   const verificationCode = extractVerificationCode(email.text, email.html)
                     || extractVerificationCode(email.subject, null)
                   return (
-                    <div class="relative border rounded-md p-3 hover:bg-muted/50 transition-colors group">
-                      <a href={`/mail/${email.id}`} class="absolute inset-0 z-0" aria-label="查看邮件详情"></a>
-                      <div class="flex items-start justify-between gap-2 relative z-10 pointer-events-none">
-                        <div class="flex-1 min-w-0">
+                    <div
+                      class="relative border rounded-md p-3 hover:bg-muted/50 transition-colors group cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                      data-row-link={`/mail/${email.id}`}
+                      tabindex="0"
+                      role="link"
+                      aria-label="查看邮件详情"
+                    >
+                      <div class="flex items-start justify-between gap-2 relative z-10">
+                        <div class="flex-1 min-w-0 cursor-text select-text">
                           <div class="flex items-center gap-2 mb-1">
                             <span class="text-sm font-medium truncate">{email.fromName || email.fromAddress}</span>
                             <span class="text-xs text-muted-foreground">{formatDate(email.createdAt)}</span>

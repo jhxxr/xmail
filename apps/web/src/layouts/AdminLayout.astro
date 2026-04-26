@@ -49,6 +49,135 @@ const currentPath = Astro.url.pathname
         </main>
       </div>
     </div>
+    <script>
+      let activeRowPointer = null
+
+      const shouldIgnoreRowClick = (target) =>
+        !!target.closest("a, button, input, textarea, select, label, summary, [role='button'], [data-row-ignore]")
+
+      const hasSelectionInsideRow = (row) => {
+        const selection = window.getSelection?.()
+        if (!selection || selection.isCollapsed) {
+          return false
+        }
+
+        return [selection.anchorNode, selection.focusNode].some((node) => node && row.contains(node))
+      }
+
+      const hasDraggedInsideRow = (row) => activeRowPointer?.row === row && activeRowPointer.dragged
+
+      const openRowLink = (row, event) => {
+        const href = row.dataset.rowLink
+        if (!href) {
+          return
+        }
+
+        if (event instanceof MouseEvent && (event.metaKey || event.ctrlKey || event.button === 1)) {
+          window.open(href, "_blank", "noopener")
+          return
+        }
+
+        window.location.assign(href)
+      }
+
+      document.addEventListener("pointerdown", (event) => {
+        const target = event.target
+        if (!(target instanceof Element)) {
+          activeRowPointer = null
+          return
+        }
+
+        const row = target.closest("[data-row-link]")
+        if (!(row instanceof HTMLElement) || shouldIgnoreRowClick(target)) {
+          activeRowPointer = null
+          return
+        }
+
+        activeRowPointer = {
+          row,
+          pointerId: event.pointerId,
+          startX: event.clientX,
+          startY: event.clientY,
+          dragged: false,
+        }
+      })
+
+      document.addEventListener("pointermove", (event) => {
+        if (!activeRowPointer || activeRowPointer.pointerId !== event.pointerId) {
+          return
+        }
+
+        if (Math.abs(event.clientX - activeRowPointer.startX) > 4 || Math.abs(event.clientY - activeRowPointer.startY) > 4) {
+          activeRowPointer.dragged = true
+        }
+      })
+
+      document.addEventListener("pointerup", (event) => {
+        if (!activeRowPointer || activeRowPointer.pointerId !== event.pointerId) {
+          return
+        }
+
+        window.setTimeout(() => {
+          activeRowPointer = null
+        }, 0)
+      })
+
+      document.addEventListener("pointercancel", () => {
+        activeRowPointer = null
+      })
+
+      document.addEventListener("click", (event) => {
+        const target = event.target
+        if (!(target instanceof Element)) {
+          return
+        }
+
+        const row = target.closest("[data-row-link]")
+        if (!(row instanceof HTMLElement) || shouldIgnoreRowClick(target) || hasSelectionInsideRow(row) || hasDraggedInsideRow(row)) {
+          return
+        }
+
+        openRowLink(row, event)
+      })
+
+      document.addEventListener("auxclick", (event) => {
+        if (event.button !== 1) {
+          return
+        }
+
+        const target = event.target
+        if (!(target instanceof Element)) {
+          return
+        }
+
+        const row = target.closest("[data-row-link]")
+        if (!(row instanceof HTMLElement) || shouldIgnoreRowClick(target) || hasSelectionInsideRow(row) || hasDraggedInsideRow(row)) {
+          return
+        }
+
+        event.preventDefault()
+        openRowLink(row, event)
+      })
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") {
+          return
+        }
+
+        const target = event.target
+        if (!(target instanceof HTMLElement)) {
+          return
+        }
+
+        const row = target.closest("[data-row-link]")
+        if (!(row instanceof HTMLElement) || row !== target) {
+          return
+        }
+
+        event.preventDefault()
+        openRowLink(row, event)
+      })
+    </script>
   </body>
 </html>
 

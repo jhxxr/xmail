@@ -722,8 +722,12 @@ export async function getStats(db: DB): Promise<{
 }> {
   const [users, mailboxes, unassigned, emails] = await Promise.all([
     db.select({ count: count() }).from(schema.users).get(),
-    db.select({ count: count() }).from(schema.mailboxes).get(),
-    db.select({ count: count() }).from(schema.mailboxes).where(isNull(schema.mailboxes.userId)).get(),
+    db.select({ count: count() }).from(schema.mailboxes).where(isNull(schema.mailboxes.deletedAt)).get(),
+    db.select({ count: count() }).from(schema.mailboxes).where(and(
+      isNull(schema.mailboxes.deletedAt),
+      isNull(schema.mailboxes.userId),
+      eq(schema.mailboxes.isShared, false)
+    )).get(),
     db.select({ count: count() }).from(schema.emails).get(),
   ])
   return {
