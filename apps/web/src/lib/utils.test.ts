@@ -46,6 +46,13 @@ describe('extractVerificationCode', () => {
       expect(extractVerificationCode(text, null)).toBe('867298')
     })
 
+    it('应该从混入纯文本CSS样式的OpenAI验证码文本中提取', () => {
+      const cssNoise = '@font-face font-family Sohne src url https cdn openai com soehne woff2 font-style normal font-weight 400 font-display swap ExternalClass line-height 100 bodyTable width 560 bodyCell padding 20 media max-width 480 signIn max-width 280 '
+      const inlineStyleNoise = 'font-family Menlo Monaco Lucida Console Arial font-size 24px line-height 28px background-color F3F3F3 color 5D5D5D border-radius 16px padding 28px 24px margin 24px 0 '
+      const text = `Your temporary ChatGPT verification code ${cssNoise} Enter this temporary verification code to continue: ${inlineStyleNoise}867298 Please ignore this email if this was not you trying to create a ChatGPT account.`
+      expect(extractVerificationCode(text, null)).toBe('867298')
+    })
+
     it('正文包含年份和email字样时仍应提取验证码', () => {
       const text = 'If you were not trying to log in to OpenAI, please reset your password. Your verification code is 824195. Copyright © 2026 OpenAI. This email was sent automatically.'
       expect(extractVerificationCode(text, null)).toBe('824195')

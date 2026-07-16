@@ -149,7 +149,9 @@ export function extractVerificationCode(text: string | null, html: string | null
       }
       return increasing || decreasing
     }
-    if (match.length >= 5 && /^\d+$/.test(match) && isSequential(match)) return true
+    const hasVerificationContext = fallbackAuthHints.test(nearContext)
+      || /(验证码|校验码|动态码|确认码|安全码|认证码|登录码|注册码|验证代码|安全代码)/.test(nearContext)
+    if (match.length >= 5 && /^\d+$/.test(match) && isSequential(match) && !hasVerificationContext) return true
 
     // 3. 如果命中邮箱地址的一部分，排除
     const emails = nearContext.match(/[\w.-]+@[\w.-]+\.\w+/g) || []
@@ -342,6 +344,7 @@ export function extractVerificationCode(text: string | null, html: string | null
       const fullContext = content.slice(Math.max(0, index - 140), Math.min(content.length, index + code.length + 140))
       const nearContext = content.slice(Math.max(0, index - 80), Math.min(content.length, index + code.length + 80))
       const nearContextLower = nearContext.toLowerCase()
+      const beforeContextLower = content.slice(Math.max(0, index - 360), index).toLowerCase()
 
       if (shouldExclude(code, fullContext, nearContext)) continue
 
@@ -351,6 +354,7 @@ export function extractVerificationCode(text: string | null, html: string | null
       if (emphasisCodeSet.has(code)) score += 4
       if (fallbackAuthHints.test(nearContextLower)) score += 5
       if (fallbackActionVerbs.test(nearContextLower)) score += 2
+      if (fallbackAuthHints.test(beforeContextLower) && fallbackActionVerbs.test(beforeContextLower)) score += 5
       if (fallbackNoiseHints.test(nearContextLower)) score -= 3
 
       const connectorPattern = new RegExp(`(?:[:：#]|\\bis\\b|\\best\\b|\\bist\\b|\\bes\\b|\\blautet\\b|\\b为\\b|\\b是\\b)\\s*${escapedCode}\\b`, 'i')
