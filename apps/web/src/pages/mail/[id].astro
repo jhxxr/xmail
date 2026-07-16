@@ -160,14 +160,16 @@ function sanitizeHtml(html: string): string {
 
   .mail-content::selection,
   .mail-content *::selection {
-    background: hsl(var(--primary) / 0.28) !important;
-    color: inherit !important;
+    background: hsl(var(--selection)) !important;
+    color: hsl(var(--selection-foreground)) !important;
+    text-shadow: none !important;
   }
 
   .mail-content::-moz-selection,
   .mail-content *::-moz-selection {
-    background: hsl(var(--primary) / 0.28) !important;
-    color: inherit !important;
+    background: hsl(var(--selection)) !important;
+    color: hsl(var(--selection-foreground)) !important;
+    text-shadow: none !important;
   }
 
   .prose img {
