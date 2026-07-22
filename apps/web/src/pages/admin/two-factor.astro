@@ -8,7 +8,7 @@ import {
   deleteTwoFactorEntry,
   getAdminById,
   getTwoFactorEntry,
-  getTwoFactorEntryUsers,
+  getTwoFactorEntryUsersMap,
   listTwoFactorEntries,
   listUsers,
   updateTwoFactorEntry,
@@ -156,8 +156,8 @@ if (Astro.url.searchParams.get("msg") === "updated") {
 
 const users = await listUsers(db, { limit: 200 })
 const entries = await listTwoFactorEntries(db, { includeSecret: true })
-const entryAssignments = await Promise.all(
-  entries.map(async (entry) => [entry.id, await getTwoFactorEntryUsers(db, entry.id)] as const)
+const entryAssignments = Object.entries(
+  await getTwoFactorEntryUsersMap(db, entries.map((entry) => entry.id))
 )
 
 const assignmentMap = Object.fromEntries(

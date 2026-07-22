@@ -1,6 +1,6 @@
 ---
 import AdminLayout from "../../layouts/AdminLayout.astro"
-import { createDB, listExternalProviders, listExternalAccounts, createExternalProvider, createExternalAccount, deleteExternalProvider, deleteExternalAccount, listMailboxes, getExternalAccountUsers, assignExternalAccountToUser, unassignExternalAccountFromUser, listUsers, updateExternalProvider, updateExternalAccount, addServiceToExternalAccount, removeServiceFromExternalAccount, listServiceTemplates, getExternalAccountServicesWithDetails } from "database"
+import { createDB, listExternalProviders, listExternalAccounts, createExternalProvider, createExternalAccount, deleteExternalProvider, deleteExternalAccount, listMailboxes, getExternalAccountUsers, getExternalAccountUsersMap, assignExternalAccountToUser, unassignExternalAccountFromUser, listUsers, updateExternalProvider, updateExternalAccount, addServiceToExternalAccount, removeServiceFromExternalAccount, listServiceTemplates, getExternalAccountServicesMap } from "database"
 import { verifyToken } from "../../lib/auth"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
 import { Button } from "../../components/ui/button"
@@ -193,18 +193,24 @@ if (Astro.request.method === "POST") {
 }
 
 // 获取数据
-const providers = await listExternalProviders(db)
-const allAccounts = await listExternalAccounts(db)
-const mailboxes = await listMailboxes(db, { limit: 1000 })
-const users = await listUsers(db, { limit: 1000 })
-const serviceTemplates = await listServiceTemplates(db)
-const accountServicesEntries = await Promise.all(
-  allAccounts.map(async (account) => {
-    const services = await getExternalAccountServicesWithDetails(db, account.id)
-    return [account.id, services] as const
-  })
+const [providers, allAccounts, mailboxes, users, serviceTemplates] = await Promise.all([
+  listExternalProviders(db),
+  listExternalAccounts(db),
+  listMailboxes(db, { limit: 1000 }),
+  listUsers(db, { limit: 1000 }),
+  listServiceTemplates(db),
+])
+const accountIds = allAccounts.map((account) => account.id)
+const [accountServicesMap, accountUsersMap] = await Promise.all([
+  getExternalAccountServicesMap(db, accountIds),
+  getExternalAccountUsersMap(db, accountIds),
+])
+const accountUserIdsMap: Record<string, Set<string>> = Object.fromEntries(
+  Object.entries(accountUsersMap).map(([accountId, assignedUsers]) => [
+    accountId,
+    new Set(assignedUsers.map((user) => user.id)),
+  ])
 )
-const accountServicesMap = Object.fromEntries(accountServicesEntries) as Record<string, Awaited<ReturnType<typeof getExternalAccountServicesWithDetails>>>
 
 // 按提供商分组账号
 const accountsByProvider = new Map<string, typeof allAccounts>()
@@ -460,9 +466,8 @@ for (const provider of providers) {
                       <input type="hidden" name="accountId" value={account.id} />
                       <h3 class="text-lg font-semibold mb-4">分配用户 - {account.email}</h3>
                       <div class="space-y-2 max-h-96 overflow-y-auto mb-4">
-                        {users.map(async (user) => {
-                          const assignedUsers = await getExternalAccountUsers(db, account.id)
-                          const isAssigned = assignedUsers.some(u => u.id === user.id)
+                        {users.map((user) => {
+                          const isAssigned = accountUserIdsMap[account.id]?.has(user.id) ?? false
                           return (
                             <label class="flex items-center gap-2 p-2 hover:bg-accent rounded cursor-pointer">
                               <input

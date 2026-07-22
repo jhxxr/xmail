@@ -1,6 +1,6 @@
 ---
 import AdminLayout from "../../layouts/AdminLayout.astro"
-import { createDB, getAdminById, listUsers, createUser, deleteUser, updateUser, createLog, listMailboxes, getUserById } from "database"
+import { createDB, getAdminById, listUsers, createUser, deleteUser, updateUser, createLog, getUserById, getUserMailboxCounts } from "database"
 import { verifyToken } from "../../lib/auth"
 import { formatDate } from "../../lib/utils"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
@@ -82,12 +82,8 @@ if (Astro.url.searchParams.get("msg") === "updated") {
   messageType = "success"
 }
 
-// 获取每个用户的邮箱数量
-const userMailboxCounts: Record<string, number> = {}
-for (const user of users) {
-  const mailboxes = await listMailboxes(db, { userId: user.id, limit: 1000 })
-  userMailboxCounts[user.id] = mailboxes.length
-}
+// 一次聚合获取所有用户的邮箱数量
+const userMailboxCounts = await getUserMailboxCounts(db, users.map((user) => user.id))
 ---
 
 <AdminLayout title="用户管理">

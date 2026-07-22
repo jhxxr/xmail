@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, primaryKey } from "drizzle-orm/sqlite-core"
+import { sqliteTable, text, integer, primaryKey, index } from "drizzle-orm/sqlite-core"
 
 // 管理员表
 export const admins = sqliteTable("admins", {
@@ -36,7 +36,10 @@ export const mailboxes = sqliteTable("mailboxes", {
   isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
   deletedAt: integer("deleted_at"), // 软删除时间戳
   deletedBy: text("deleted_by"), // 删除者（admin_id 或 user_id 或 "user"）
-})
+}, (t) => ({
+  ownerIdx: index("idx_mailboxes_owner").on(t.userId, t.isShared, t.deletedAt),
+  deletedIdx: index("idx_mailboxes_deleted_created").on(t.deletedAt, t.createdAt),
+}))
 
 // 用户与共享邮箱的分配关系表 (多对多)
 export const userMailboxes = sqliteTable("user_mailboxes", {
@@ -45,6 +48,7 @@ export const userMailboxes = sqliteTable("user_mailboxes", {
   assignedAt: integer("assigned_at").notNull(),
 }, (t) => ({
   pk: primaryKey({ columns: [t.userId, t.mailboxAddress] }),
+  mailboxIdx: index("idx_user_mailboxes_mailbox").on(t.mailboxAddress, t.userId),
 }))
 
 // 2FA 密钥条目
@@ -90,7 +94,11 @@ export const emails = sqliteTable("emails", {
   isRead: integer("is_read", { mode: "boolean" }).notNull().default(false),
   readAt: integer("read_at"),
   createdAt: integer("created_at").notNull(),
-})
+}, (t) => ({
+  mailboxCreatedIdx: index("idx_emails_mailbox_created").on(t.mailboxAddress, t.createdAt),
+  starredCreatedIdx: index("idx_emails_starred_created").on(t.isStarred, t.createdAt),
+  createdIdx: index("idx_emails_created").on(t.createdAt),
+}))
 
 // 操作日志表
 export const logs = sqliteTable("logs", {
@@ -101,7 +109,9 @@ export const logs = sqliteTable("logs", {
   details: text("details"),
   ip: text("ip"),
   createdAt: integer("created_at").notNull(),
-})
+}, (t) => ({
+  createdIdx: index("idx_logs_created").on(t.createdAt),
+}))
 
 // 系统设置表
 export const settings = sqliteTable("settings", {
@@ -135,7 +145,9 @@ export const mailboxServices = sqliteTable("mailbox_services", {
   expiresAt: integer("expires_at"), // 服务到期时间（Unix 时间戳）
 
   createdAt: integer("created_at").notNull(),
-})
+}, (t) => ({
+  mailboxIdx: index("idx_mailbox_services_mailbox").on(t.mailboxAddress),
+}))
 
 // 第三方邮箱提供商表 (如 Gmail, Outlook)
 export const externalProviders = sqliteTable("external_providers", {
@@ -157,7 +169,9 @@ export const externalAccounts = sqliteTable("external_accounts", {
   note: text("note"),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
-})
+}, (t) => ({
+  providerIdx: index("idx_external_accounts_provider").on(t.providerId),
+}))
 
 // 用户与第三方账号的分配关系表 (多对多)
 export const userExternalAccounts = sqliteTable("user_external_accounts", {
@@ -166,6 +180,7 @@ export const userExternalAccounts = sqliteTable("user_external_accounts", {
   assignedAt: integer("assigned_at").notNull(),
 }, (t) => ({
   pk: primaryKey({ columns: [t.userId, t.accountId] }),
+  accountIdx: index("idx_user_external_accounts_account").on(t.accountId, t.userId),
 }))
 
 // 第三方账号服务关联表（类似 mailboxServices）
@@ -182,7 +197,9 @@ export const externalAccountServices = sqliteTable("external_account_services", 
   customNote: text("custom_note"),
 
   createdAt: integer("created_at").notNull(),
-})
+}, (t) => ({
+  accountIdx: index("idx_external_account_services_account").on(t.accountId),
+}))
 
 // API 密钥表
 export const apiKeys = sqliteTable("api_keys", {

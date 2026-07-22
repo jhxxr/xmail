@@ -1,6 +1,6 @@
 ---
 import Layout from "../layouts/Layout.astro"
-import { createDB, getUserByToken, listMailboxes, getMailboxStats, getMailboxServicesMap, getUserExternalAccounts, getExternalProvider, getExternalAccountServicesMap, listSharedMailboxes } from "database"
+import { createDB, listMailboxes, getMailboxStatsMap, getMailboxServicesMap, getUserExternalAccounts, getExternalAccountServicesMap, listExternalProviders, listSharedMailboxes } from "database"
 import { verifyToken } from "../lib/auth"
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
 import { Button } from "../components/ui/button"
@@ -27,47 +27,35 @@ if (!userId) {
 }
 
 // 获取用户的所有邮箱和第三方账号
-const [mailboxes, sharedMailboxes, externalAccounts] = await Promise.all([
+const [mailboxes, sharedMailboxes, externalAccounts, externalProviders] = await Promise.all([
   listMailboxes(db, { userId, limit: 100 }),
   listSharedMailboxes(db, userId),
-  getUserExternalAccounts(db, userId)
+  getUserExternalAccounts(db, userId),
+  listExternalProviders(db),
 ])
 
 // 并行获取邮箱统计和服务信息
-const allMailboxAddresses = [...mailboxes.map(m => m.address), ...sharedMailboxes.map(m => m.address)]
-const [mailboxesWithStats, sharedMailboxesWithStats, servicesMap, externalServicesMap] = await Promise.all([
-  Promise.all(
-    mailboxes.map(async (mailbox) => {
-      const stats = await getMailboxStats(db, mailbox.address)
-      return {
-        ...mailbox,
-        stats,
-      }
-    })
-  ),
-  Promise.all(
-    sharedMailboxes.map(async (mailbox) => {
-      const stats = await getMailboxStats(db, mailbox.address)
-      return {
-        ...mailbox,
-        stats,
-      }
-    })
-  ),
+const allMailboxAddresses = [...new Set([...mailboxes.map(m => m.address), ...sharedMailboxes.map(m => m.address)])]
+const [statsMap, servicesMap, externalServicesMap] = await Promise.all([
+  getMailboxStatsMap(db, allMailboxAddresses),
   getMailboxServicesMap(db, allMailboxAddresses),
   getExternalAccountServicesMap(db, externalAccounts.map(a => a.id))
 ])
+const mailboxesWithStats = mailboxes.map((mailbox) => ({
+  ...mailbox,
+  stats: statsMap[mailbox.address] ?? { total: 0, unread: 0 },
+}))
+const sharedMailboxesWithStats = sharedMailboxes.map((mailbox) => ({
+  ...mailbox,
+  stats: statsMap[mailbox.address] ?? { total: 0, unread: 0 },
+}))
 
 // 获取第三方账号的提供商信息
-const externalAccountsWithProvider = await Promise.all(
-  externalAccounts.map(async (account) => {
-    const provider = await getExternalProvider(db, account.providerId)
-    return {
-      ...account,
-      provider,
-    }
-  })
-)
+const providerMap = new Map(externalProviders.map((provider) => [provider.id, provider]))
+const externalAccountsWithProvider = externalAccounts.map((account) => ({
+  ...account,
+  provider: providerMap.get(account.providerId) ?? null,
+}))
 
 // 按服务分组邮箱
 type ServiceGroup = {

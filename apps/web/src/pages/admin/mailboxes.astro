@@ -1,6 +1,6 @@
 ---
 import AdminLayout from "../../layouts/AdminLayout.astro"
-import { createDB, listMailboxes, createMailbox, createMailboxBatch, deleteMailbox, deleteMailboxesBatch, setMailboxActive, getMailbox, getMailboxPlainPassword, createLog, getAdminById, getMailDomain, getMailDomains, getUserById, getMailboxServicesMap, listServiceTemplates, addServiceToMailbox, addCustomServiceToMailbox, removeServiceFromMailbox, batchBindServicesToMailboxes, listUsers, assignMailboxToUser, updateServiceExpiration, setMailboxShared, assignSharedMailboxToUsers, getSharedMailboxUsers } from "database"
+import { createDB, listMailboxes, createMailbox, createMailboxBatch, deleteMailbox, deleteMailboxesBatch, setMailboxActive, getMailbox, getMailboxPlainPassword, createLog, getAdminById, getMailDomain, getMailDomains, getUserById, getMailboxServicesMap, listServiceTemplates, addServiceToMailbox, addCustomServiceToMailbox, removeServiceFromMailbox, batchBindServicesToMailboxes, listUsers, assignMailboxToUser, updateServiceExpiration, setMailboxShared, assignSharedMailboxToUsers, getSharedMailboxUsersMap } from "database"
 import { verifyToken, generateMailboxAccessToken } from "../../lib/auth"
 import { formatDate } from "../../lib/utils"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
@@ -418,40 +418,39 @@ if (Astro.request.method === "POST") {
 
 const filter = Astro.url.searchParams.get("filter")
 const serviceFilters = Astro.url.searchParams.getAll("service") // 服务筛选（多选）
-let mailboxes = await listMailboxes(db, { limit: 100, unassignedOnly: filter === "unassigned" })
-
-// 获取全局服务模板
-const serviceTemplates = await listServiceTemplates(db)
-
-// 获取所有用户用于弹窗绑定
-const allUsers = await listUsers(db, { limit: 200 })
+let [mailboxes, serviceTemplates, allUsers] = await Promise.all([
+  listMailboxes(db, { limit: 100, unassignedOnly: filter === "unassigned" }),
+  listServiceTemplates(db),
+  listUsers(db, { limit: 200 }),
+])
 
 // 获取用户信息
 const userCache: Record<string, string> = {}
+const usersById = new Map(allUsers.map((user) => [user.id, user]))
 for (const mb of mailboxes) {
   if (mb.userId && !userCache[mb.userId]) {
-    const user = await getUserById(db, mb.userId)
+    const user = usersById.get(mb.userId)
     userCache[mb.userId] = user?.name || user?.note || mb.userId.slice(0, 8)
   }
 }
 
-// 获取所有邮箱的服务
-const servicesMap = await getMailboxServicesMap(db, mailboxes.map(mb => mb.address))
+const sharedMailboxAddresses = mailboxes.filter((mailbox) => mailbox.isShared).map((mailbox) => mailbox.address)
+const [servicesMap, sharedAssignmentsMap] = await Promise.all([
+  getMailboxServicesMap(db, mailboxes.map((mailbox) => mailbox.address)),
+  getSharedMailboxUsersMap(db, sharedMailboxAddresses),
+])
 
 // 获取共享邮箱的用户列表
 const sharedUsersMap: Record<string, Array<{ userId: string; userName: string }>> = {}
 for (const mb of mailboxes) {
   if (mb.isShared) {
-    const sharedUsers = await getSharedMailboxUsers(db, mb.address)
-    sharedUsersMap[mb.address] = await Promise.all(
-      sharedUsers.map(async (su) => {
-        const user = await getUserById(db, su.userId)
-        return {
-          userId: su.userId,
-          userName: user?.name || user?.note || su.userId.slice(0, 8)
-        }
-      })
-    )
+    sharedUsersMap[mb.address] = (sharedAssignmentsMap[mb.address] ?? []).map((assignment) => {
+      const user = usersById.get(assignment.userId)
+      return {
+        userId: assignment.userId,
+        userName: user?.name || user?.note || assignment.userId.slice(0, 8),
+      }
+    })
   }
 }
 

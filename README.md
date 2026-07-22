@@ -288,7 +288,8 @@ cp .mcp.json.example .mcp.json
 | --- | --- |
 | `pnpm dev` | 启动 Web 开发服务器 |
 | `pnpm build` | 构建 Web 应用 |
-| `pnpm deploy` | 依次部署 Web 和 Email Worker |
+| `pnpm deploy` | 应用幂等性能索引，再依次部署 Web 和 Email Worker |
+| `pnpm db:optimize` | 为远程 D1 应用高频查询所需的性能索引 |
 | `pnpm --filter email-worker dev` | 启动 Email Worker 开发模式 |
 | `pnpm db:generate` | 根据当前 Drizzle schema 生成 SQL 迁移 |
 | `pnpm --filter web exec wrangler d1 execute ...` | 将指定 SQL 应用到本地或远程 D1 |
@@ -313,7 +314,7 @@ cp .mcp.json.example .mcp.json
 
 ### 修改 schema 后部署失败
 
-应用代码前先运行 `pnpm db:generate`，检查生成的 SQL，并使用 Wrangler 将新增迁移应用到目标 D1。`pnpm deploy` 本身不会迁移数据库。
+应用代码前先运行 `pnpm db:generate`，检查生成的 SQL，并使用 Wrangler 将新增迁移应用到目标 D1。`pnpm deploy` 只会自动应用仓库内可重复执行的性能索引，不会自动执行其他结构迁移。
 
 ## 更多文档
 

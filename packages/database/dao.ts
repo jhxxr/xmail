@@ -1,9 +1,22 @@
 import { drizzle } from "drizzle-orm/d1"
-import { eq, desc, and, count, isNull, lt, isNotNull, inArray } from "drizzle-orm"
+import { eq, desc, and, count, isNull, lt, isNotNull, inArray, sql } from "drizzle-orm"
 import { nanoid } from "nanoid"
 import * as schema from "./schema"
 
 type D1LikeDatabase = Parameters<typeof drizzle>[0]
+
+// D1 limits the number of bound parameters in a statement. Keep IN queries
+// below that ceiling while still collapsing N+1 reads into a few batches.
+const D1_IN_QUERY_CHUNK_SIZE = 90
+
+function uniqueChunks(values: string[]): string[][] {
+  const uniqueValues = [...new Set(values)]
+  const chunks: string[][] = []
+  for (let index = 0; index < uniqueValues.length; index += D1_IN_QUERY_CHUNK_SIZE) {
+    chunks.push(uniqueValues.slice(index, index + D1_IN_QUERY_CHUNK_SIZE))
+  }
+  return chunks
+}
 
 export function createDB(d1: D1LikeDatabase) {
   return drizzle(d1, { schema })
@@ -284,6 +297,34 @@ export async function listMailboxes(db: DB, options: { limit?: number; offset?: 
   return query.orderBy(desc(schema.mailboxes.createdAt)).limit(limit).offset(offset).all() as Array<schema.Mailbox & { plainPassword: string | null }>
 }
 
+export async function getUserMailboxCounts(db: DB, userIds: string[]): Promise<Record<string, number>> {
+  const result: Record<string, number> = Object.fromEntries(
+    [...new Set(userIds)].map((userId) => [userId, 0])
+  )
+
+  const rows = (await Promise.all(
+    uniqueChunks(userIds).map((chunk) =>
+      db.select({
+        userId: schema.mailboxes.userId,
+        count: count(),
+      })
+        .from(schema.mailboxes)
+        .where(and(
+          inArray(schema.mailboxes.userId, chunk),
+          eq(schema.mailboxes.isShared, false),
+          isNull(schema.mailboxes.deletedAt)
+        ))
+        .groupBy(schema.mailboxes.userId)
+        .all()
+    )
+  )).flat()
+
+  for (const row of rows) {
+    if (row.userId) result[row.userId] = Number(row.count)
+  }
+  return result
+}
+
 export async function assignMailboxToUser(db: DB, address: string, userId: string | null): Promise<void> {
   await db.update(schema.mailboxes).set({ userId }).where(eq(schema.mailboxes.address, address))
 }
@@ -353,6 +394,26 @@ export async function removeUserFromSharedMailbox(db: DB, address: string, userI
 
 export async function getSharedMailboxUsers(db: DB, address: string): Promise<Array<{ userId: string; assignedAt: number }>> {
   return db.select().from(schema.userMailboxes).where(eq(schema.userMailboxes.mailboxAddress, address)).all()
+}
+
+export async function getSharedMailboxUsersMap(db: DB, addresses: string[]): Promise<Record<string, schema.UserMailbox[]>> {
+  const result: Record<string, schema.UserMailbox[]> = Object.fromEntries(
+    [...new Set(addresses)].map((address) => [address, []])
+  )
+
+  const assignments = (await Promise.all(
+    uniqueChunks(addresses).map((chunk) =>
+      db.select()
+        .from(schema.userMailboxes)
+        .where(inArray(schema.userMailboxes.mailboxAddress, chunk))
+        .all()
+    )
+  )).flat()
+
+  for (const assignment of assignments) {
+    result[assignment.mailboxAddress]?.push(assignment)
+  }
+  return result
 }
 
 export async function listSharedMailboxes(db: DB, userId: string): Promise<schema.Mailbox[]> {
@@ -575,6 +636,27 @@ export async function getTwoFactorEntryUsers(db: DB, id: string): Promise<schema
   return db.select().from(schema.userTwoFactorEntries).where(eq(schema.userTwoFactorEntries.twoFactorEntryId, id)).all()
 }
 
+export async function getTwoFactorEntryUsersMap(db: DB, ids: string[]): Promise<Record<string, schema.UserTwoFactorEntry[]>> {
+  await ensureTwoFactorSchema(db)
+  const result: Record<string, schema.UserTwoFactorEntry[]> = Object.fromEntries(
+    [...new Set(ids)].map((id) => [id, []])
+  )
+
+  const assignments = (await Promise.all(
+    uniqueChunks(ids).map((chunk) =>
+      db.select()
+        .from(schema.userTwoFactorEntries)
+        .where(inArray(schema.userTwoFactorEntries.twoFactorEntryId, chunk))
+        .all()
+    )
+  )).flat()
+
+  for (const assignment of assignments) {
+    result[assignment.twoFactorEntryId]?.push(assignment)
+  }
+  return result
+}
+
 export async function listTwoFactorEntriesForUser(db: DB, userId: string): Promise<Array<schema.TwoFactorEntry & { secret: string }>> {
   await ensureTwoFactorSchema(db)
   const assignments = await db.select().from(schema.userTwoFactorEntries).where(eq(schema.userTwoFactorEntries.userId, userId)).all()
@@ -642,12 +724,39 @@ export async function countEmails(db: DB): Promise<number> {
   return result?.count ?? 0
 }
 
-export async function getMailboxStats(db: DB, mailboxAddress: string): Promise<{ total: number; unread: number }> {
-  const [total, unread] = await Promise.all([
-    db.select({ count: count() }).from(schema.emails).where(eq(schema.emails.mailboxAddress, mailboxAddress)).get(),
-    db.select({ count: count() }).from(schema.emails).where(and(eq(schema.emails.mailboxAddress, mailboxAddress), eq(schema.emails.isRead, false))).get(),
-  ])
-  return { total: total?.count ?? 0, unread: unread?.count ?? 0 }
+export type MailboxStats = { total: number; unread: number }
+
+export async function getMailboxStatsMap(db: DB, mailboxAddresses: string[]): Promise<Record<string, MailboxStats>> {
+  const result: Record<string, MailboxStats> = Object.fromEntries(
+    [...new Set(mailboxAddresses)].map((address) => [address, { total: 0, unread: 0 }])
+  )
+
+  const rows = (await Promise.all(
+    uniqueChunks(mailboxAddresses).map((chunk) =>
+      db.select({
+        mailboxAddress: schema.emails.mailboxAddress,
+        total: count(),
+        unread: sql<number>`sum(case when ${schema.emails.isRead} = 0 then 1 else 0 end)`,
+      })
+        .from(schema.emails)
+        .where(inArray(schema.emails.mailboxAddress, chunk))
+        .groupBy(schema.emails.mailboxAddress)
+        .all()
+    )
+  )).flat()
+
+  for (const row of rows) {
+    result[row.mailboxAddress] = {
+      total: Number(row.total ?? 0),
+      unread: Number(row.unread ?? 0),
+    }
+  }
+  return result
+}
+
+export async function getMailboxStats(db: DB, mailboxAddress: string): Promise<MailboxStats> {
+  const stats = await getMailboxStatsMap(db, [mailboxAddress])
+  return stats[mailboxAddress] ?? { total: 0, unread: 0 }
 }
 
 // ============ 日志操作 ============
@@ -803,52 +912,38 @@ export async function addCustomServiceToMailbox(
   return service as schema.MailboxService
 }
 
-// 获取邮箱的所有服务（包含完整信息）
-export async function getMailboxServicesWithDetails(db: DB, mailboxAddress: string) {
-  const services = await db.select().from(schema.mailboxServices).where(eq(schema.mailboxServices.mailboxAddress, mailboxAddress)).all()
+export type MailboxServiceDetails = {
+  id: string
+  name: string
+  loginUrl: string
+  note: string | null
+  isCustom: boolean
+  templateId: string | null
+  expiresAt: number | null
+}
 
-  const result = []
-  for (const service of services) {
-    if (service.templateId) {
-      // 引用全局模板的服务
-      const template = await getServiceTemplate(db, service.templateId)
-      if (template) {
-        result.push({
-          id: service.id,
-          name: template.name,
-          loginUrl: template.loginUrl,
-          note: template.note,
-          isCustom: false,
-          templateId: template.id,
-          expiresAt: service.expiresAt,
-        })
-      }
-    } else {
-      // 自定义临时服务
-      result.push({
-        id: service.id,
-        name: service.customName || "",
-        loginUrl: service.customLoginUrl || "",
-        note: service.customNote,
-        isCustom: true,
-        templateId: null,
-        expiresAt: service.expiresAt,
-      })
-    }
-  }
-  return result
+export type MailboxServicesMap = Record<string, MailboxServiceDetails[]>
+
+// 获取邮箱的所有服务（包含完整信息）
+export async function getMailboxServicesWithDetails(db: DB, mailboxAddress: string): Promise<MailboxServiceDetails[]> {
+  const servicesMap = await getMailboxServicesMap(db, [mailboxAddress])
+  return servicesMap[mailboxAddress] ?? []
 }
 
 // 获取多个邮箱的服务（优化版：批量查询）
-export async function getMailboxServicesMap(db: DB, mailboxAddresses: string[]) {
-  if (mailboxAddresses.length === 0) return {}
+export async function getMailboxServicesMap(db: DB, mailboxAddresses: string[]): Promise<MailboxServicesMap> {
+  const uniqueAddresses = [...new Set(mailboxAddresses)]
+  if (uniqueAddresses.length === 0) return {}
 
   // 1. 批量获取所有邮箱的服务关联
-  const allServices = await db
-    .select()
-    .from(schema.mailboxServices)
-    .where(inArray(schema.mailboxServices.mailboxAddress, mailboxAddresses))
-    .all()
+  const allServices = (await Promise.all(
+    uniqueChunks(uniqueAddresses).map((chunk) =>
+      db.select()
+        .from(schema.mailboxServices)
+        .where(inArray(schema.mailboxServices.mailboxAddress, chunk))
+        .all()
+    )
+  )).flat()
 
   // 2. 收集所有需要的 templateId
   const templateIds = allServices
@@ -857,31 +952,25 @@ export async function getMailboxServicesMap(db: DB, mailboxAddresses: string[]) 
   const uniqueTemplateIds = [...new Set(templateIds)]
 
   // 3. 批量获取所有模板
-  const templates =
-    uniqueTemplateIds.length > 0
-      ? await db
-          .select()
-          .from(schema.serviceTemplates)
-          .where(inArray(schema.serviceTemplates.id, uniqueTemplateIds))
-          .all()
-      : []
+  const templates = uniqueTemplateIds.length > 0
+    ? (await Promise.all(
+        uniqueChunks(uniqueTemplateIds).map((chunk) =>
+          db.select()
+            .from(schema.serviceTemplates)
+            .where(inArray(schema.serviceTemplates.id, chunk))
+            .all()
+        )
+      )).flat()
+    : []
 
   // 4. 构建模板映射
   const templateMap = new Map(templates.map((t) => [t.id, t]))
 
   // 5. 按邮箱地址分组并构建结果
-  const result: Record<string, Array<{
-    id: string
-    name: string
-    loginUrl: string
-    note: string | null
-    isCustom: boolean
-    templateId: string | null
-    expiresAt: number | null
-  }>> = {}
+  const result: MailboxServicesMap = {}
 
   // 初始化所有邮箱的结果数组
-  for (const address of mailboxAddresses) {
+  for (const address of uniqueAddresses) {
     result[address] = []
   }
 
@@ -1083,10 +1172,37 @@ export async function getUserExternalAccounts(db: DB, userId: string) {
 
 // 获取账号分配的用户列表
 export async function getExternalAccountUsers(db: DB, accountId: string) {
-  const assignments = await db.select().from(schema.userExternalAccounts).where(eq(schema.userExternalAccounts.accountId, accountId)).all()
-  const userIds = assignments.map(a => a.userId)
-  if (userIds.length === 0) return []
-  return db.select().from(schema.users).where(inArray(schema.users.id, userIds)).all()
+  const usersMap = await getExternalAccountUsersMap(db, [accountId])
+  return usersMap[accountId] ?? []
+}
+
+export async function getExternalAccountUsersMap(db: DB, accountIds: string[]): Promise<Record<string, schema.User[]>> {
+  const uniqueAccountIds = [...new Set(accountIds)]
+  const result: Record<string, schema.User[]> = Object.fromEntries(
+    uniqueAccountIds.map((accountId) => [accountId, []])
+  )
+
+  const assignments = (await Promise.all(
+    uniqueChunks(uniqueAccountIds).map((chunk) =>
+      db.select()
+        .from(schema.userExternalAccounts)
+        .where(inArray(schema.userExternalAccounts.accountId, chunk))
+        .all()
+    )
+  )).flat()
+  const userIds = [...new Set(assignments.map((assignment) => assignment.userId))]
+  const users = (await Promise.all(
+    uniqueChunks(userIds).map((chunk) =>
+      db.select().from(schema.users).where(inArray(schema.users.id, chunk)).all()
+    )
+  )).flat()
+  const userMap = new Map(users.map((user) => [user.id, user]))
+
+  for (const assignment of assignments) {
+    const user = userMap.get(assignment.userId)
+    if (user) result[assignment.accountId]?.push(user)
+  }
+  return result
 }
 
 // ==================== 第三方账号服务绑定 ====================
@@ -1097,57 +1213,37 @@ export async function addServiceToExternalAccount(db: DB, service: schema.Insert
   return service as schema.ExternalAccountService
 }
 
-// 获取第三方账号的所有服务（包含完整信息）
-export async function getExternalAccountServicesWithDetails(db: DB, accountId: string) {
-  const services = await db.select().from(schema.externalAccountServices).where(eq(schema.externalAccountServices.accountId, accountId)).all()
+export type ExternalAccountServiceDetails = {
+  id: string
+  name: string
+  loginUrl: string
+  note: string | null
+  isCustom: boolean
+  templateId: string | null
+}
 
-  const result = []
-  for (const service of services) {
-    if (service.templateId) {
-      const template = await getServiceTemplate(db, service.templateId)
-      if (template) {
-        result.push({
-          id: service.id,
-          name: template.name,
-          loginUrl: template.loginUrl,
-          note: template.note,
-          isCustom: false,
-          templateId: template.id,
-        })
-      } else {
-        result.push({
-          id: service.id,
-          name: "未知服务",
-          loginUrl: "",
-          note: "该服务模板已被删除",
-          isCustom: false,
-          templateId: service.templateId,
-        })
-      }
-    } else {
-      result.push({
-        id: service.id,
-        name: service.customName || "未命名服务",
-        loginUrl: service.customLoginUrl || "",
-        note: service.customNote,
-        isCustom: true,
-        templateId: null,
-      })
-    }
-  }
-  return result
+export type ExternalAccountServicesMap = Record<string, ExternalAccountServiceDetails[]>
+
+// 获取第三方账号的所有服务（包含完整信息）
+export async function getExternalAccountServicesWithDetails(db: DB, accountId: string): Promise<ExternalAccountServiceDetails[]> {
+  const servicesMap = await getExternalAccountServicesMap(db, [accountId])
+  return servicesMap[accountId] ?? []
 }
 
 // 获取多个第三方账号的服务（批量查询）
-export async function getExternalAccountServicesMap(db: DB, accountIds: string[]) {
-  if (accountIds.length === 0) return {}
+export async function getExternalAccountServicesMap(db: DB, accountIds: string[]): Promise<ExternalAccountServicesMap> {
+  const uniqueAccountIds = [...new Set(accountIds)]
+  if (uniqueAccountIds.length === 0) return {}
 
-  // 1. 批量获取所有账号���服务关联
-  const allServices = await db
-    .select()
-    .from(schema.externalAccountServices)
-    .where(inArray(schema.externalAccountServices.accountId, accountIds))
-    .all()
+  // 1. 批量获取所有账号的服务关联
+  const allServices = (await Promise.all(
+    uniqueChunks(uniqueAccountIds).map((chunk) =>
+      db.select()
+        .from(schema.externalAccountServices)
+        .where(inArray(schema.externalAccountServices.accountId, chunk))
+        .all()
+    )
+  )).flat()
 
   // 2. 收集所有需要的 templateId
   const templateIds = allServices
@@ -1156,30 +1252,25 @@ export async function getExternalAccountServicesMap(db: DB, accountIds: string[]
   const uniqueTemplateIds = [...new Set(templateIds)]
 
   // 3. 批量获取所有模板
-  const templates =
-    uniqueTemplateIds.length > 0
-      ? await db
-          .select()
-          .from(schema.serviceTemplates)
-          .where(inArray(schema.serviceTemplates.id, uniqueTemplateIds))
-          .all()
-      : []
+  const templates = uniqueTemplateIds.length > 0
+    ? (await Promise.all(
+        uniqueChunks(uniqueTemplateIds).map((chunk) =>
+          db.select()
+            .from(schema.serviceTemplates)
+            .where(inArray(schema.serviceTemplates.id, chunk))
+            .all()
+        )
+      )).flat()
+    : []
 
   // 4. 构建模板映射
   const templateMap = new Map(templates.map((t) => [t.id, t]))
 
   // 5. 按账号ID分组并构建结果
-  const result: Record<string, Array<{
-    id: string
-    name: string
-    loginUrl: string
-    note: string | null
-    isCustom: boolean
-    templateId: string | null
-  }>> = {}
+  const result: ExternalAccountServicesMap = {}
 
   // 初始化所有账号的结果数组
-  for (const id of accountIds) {
+  for (const id of uniqueAccountIds) {
     result[id] = []
   }
 
@@ -1274,7 +1365,10 @@ export async function verifyApiKey(db: DB, fullKey: string): Promise<schema.ApiK
   const hash = await hashPassword(secret, apiKey.salt)
   if (hash !== apiKey.keyHash) return null
 
-  await db.update(schema.apiKeys).set({ lastUsedAt: now() }).where(eq(schema.apiKeys.id, apiKey.id))
+  const currentTime = now()
+  if (!apiKey.lastUsedAt || apiKey.lastUsedAt < currentTime - 60 * 60) {
+    await db.update(schema.apiKeys).set({ lastUsedAt: currentTime }).where(eq(schema.apiKeys.id, apiKey.id))
+  }
   return apiKey
 }
 

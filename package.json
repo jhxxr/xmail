@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "corepack pnpm --filter web dev",
     "build": "corepack pnpm --filter web build",
-    "deploy": "corepack pnpm --filter web run deploy && corepack pnpm --filter email-worker run deploy",
+    "deploy": "corepack pnpm run db:optimize && corepack pnpm --filter web run deploy && corepack pnpm --filter email-worker run deploy",
+    "db:optimize": "corepack pnpm --filter web exec wrangler d1 execute xmail-db --remote --file=../../packages/database/migrations/0001_performance_indexes.sql",
     "db:generate": "corepack pnpm --filter database db:generate",
     "db:migrate": "corepack pnpm --filter database db:migrate"
   },
