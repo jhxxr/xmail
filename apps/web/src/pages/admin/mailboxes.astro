@@ -418,41 +418,16 @@ if (Astro.request.method === "POST") {
 
 const filter = Astro.url.searchParams.get("filter")
 const serviceFilters = Astro.url.searchParams.getAll("service") // 服务筛选（多选）
+const PAGE_SIZE = 12
+const requestedPage = Math.max(1, Number.parseInt(Astro.url.searchParams.get("page") || "1", 10) || 1)
 let [mailboxes, serviceTemplates, allUsers] = await Promise.all([
   listMailboxes(db, { limit: 100, unassignedOnly: filter === "unassigned" }),
   listServiceTemplates(db),
   listUsers(db, { limit: 200 }),
 ])
 
-// 获取用户信息
-const userCache: Record<string, string> = {}
 const usersById = new Map(allUsers.map((user) => [user.id, user]))
-for (const mb of mailboxes) {
-  if (mb.userId && !userCache[mb.userId]) {
-    const user = usersById.get(mb.userId)
-    userCache[mb.userId] = user?.name || user?.note || mb.userId.slice(0, 8)
-  }
-}
-
-const sharedMailboxAddresses = mailboxes.filter((mailbox) => mailbox.isShared).map((mailbox) => mailbox.address)
-const [servicesMap, sharedAssignmentsMap] = await Promise.all([
-  getMailboxServicesMap(db, mailboxes.map((mailbox) => mailbox.address)),
-  getSharedMailboxUsersMap(db, sharedMailboxAddresses),
-])
-
-// 获取共享邮箱的用户列表
-const sharedUsersMap: Record<string, Array<{ userId: string; userName: string }>> = {}
-for (const mb of mailboxes) {
-  if (mb.isShared) {
-    sharedUsersMap[mb.address] = (sharedAssignmentsMap[mb.address] ?? []).map((assignment) => {
-      const user = usersById.get(assignment.userId)
-      return {
-        userId: assignment.userId,
-        userName: user?.name || user?.note || assignment.userId.slice(0, 8),
-      }
-    })
-  }
-}
+const servicesMap = await getMailboxServicesMap(db, mailboxes.map((mailbox) => mailbox.address))
 
 // 根据服务筛选邮箱
 if (serviceFilters.length > 0) {
@@ -466,6 +441,42 @@ if (serviceFilters.length > 0) {
       )
     )
   })
+}
+
+const totalMailboxCount = mailboxes.length
+const totalPages = Math.max(1, Math.ceil(totalMailboxCount / PAGE_SIZE))
+const currentPage = Math.min(requestedPage, totalPages)
+const pageOffset = (currentPage - 1) * PAGE_SIZE
+mailboxes = mailboxes.slice(pageOffset, pageOffset + PAGE_SIZE)
+
+function getPageUrl(page: number): string {
+  const params = new URLSearchParams(Astro.url.searchParams)
+  params.set("page", String(page))
+  return `/admin/mailboxes?${params.toString()}`
+}
+
+// 只为当前页准备用户和共享分配数据，降低单次请求的查询与序列化开销。
+const userCache: Record<string, string> = {}
+for (const mb of mailboxes) {
+  if (mb.userId && !userCache[mb.userId]) {
+    const user = usersById.get(mb.userId)
+    userCache[mb.userId] = user?.name || user?.note || mb.userId.slice(0, 8)
+  }
+}
+
+const sharedMailboxAddresses = mailboxes.filter((mailbox) => mailbox.isShared).map((mailbox) => mailbox.address)
+const sharedAssignmentsMap = await getSharedMailboxUsersMap(db, sharedMailboxAddresses)
+const sharedUsersMap: Record<string, Array<{ userId: string; userName: string }>> = {}
+for (const mb of mailboxes) {
+  if (mb.isShared) {
+    sharedUsersMap[mb.address] = (sharedAssignmentsMap[mb.address] ?? []).map((assignment) => {
+      const user = usersById.get(assignment.userId)
+      return {
+        userId: assignment.userId,
+        userName: user?.name || user?.note || assignment.userId.slice(0, 8),
+      }
+    })
+  }
 }
 
 const mailboxMaskedPasswords: Record<string, string> = {}
@@ -527,6 +538,7 @@ for (const mb of mailboxes) {
           {serviceTemplates.map((tpl) => {
             const isSelected = serviceFilters.includes(tpl.id)
             const currentParams = new URLSearchParams(Astro.url.search)
+            currentParams.delete("page")
             if (isSelected) {
               // 移除该服务筛选
               const newServices = serviceFilters.filter(s => s !== tpl.id)
@@ -649,7 +661,7 @@ for (const mb of mailboxes) {
                       </td>
                       <td class="p-4 align-middle">
                         <ServiceManager
-                          client:load
+                          client:visible
                           mailbox={mb.address}
                           initialServices={services}
                           templates={serviceTemplates}
@@ -659,14 +671,14 @@ for (const mb of mailboxes) {
                         {mb.isShared ? (
                           <!-- 共享邮箱：显示多用户和管理按钮 -->
                           <SharedMailboxManager
-                            client:load
+                            client:visible
                             address={mb.address}
                             sharedUsers={sharedUsersMap[mb.address] || []}
                             allUsers={allUsers}
                           />
                         ) : (
                           <AssignUserManager
-                            client:load
+                            client:visible
                             address={mb.address}
                             allUsers={allUsers}
                             currentUserId={mb.userId}
@@ -780,7 +792,7 @@ for (const mb of mailboxes) {
                 <div class="space-y-2">
                   <div class="text-xs text-muted-foreground font-medium">关联服务</div>
                   <ServiceManager
-                    client:load
+                    client:visible
                     mailbox={mb.address}
                     initialServices={services}
                     templates={serviceTemplates}
@@ -835,6 +847,42 @@ for (const mb of mailboxes) {
         )}
       </div>
     </Card>
+
+    {totalMailboxCount > 0 && (
+      <nav class="flex flex-col sm:flex-row items-center justify-between gap-3 text-sm" aria-label="邮箱列表分页">
+        <span class="text-muted-foreground">
+          共 {totalMailboxCount} 个邮箱，第 {currentPage} / {totalPages} 页
+        </span>
+        {totalPages > 1 && (
+          <div class="flex items-center gap-2">
+            {currentPage > 1 ? (
+              <a
+                href={getPageUrl(currentPage - 1)}
+                class="inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-3 font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
+              >
+                上一页
+              </a>
+            ) : (
+              <span class="inline-flex h-9 items-center justify-center rounded-md border border-input px-3 text-muted-foreground opacity-50">
+                上一页
+              </span>
+            )}
+            {currentPage < totalPages ? (
+              <a
+                href={getPageUrl(currentPage + 1)}
+                class="inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-3 font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
+              >
+                下一页
+              </a>
+            ) : (
+              <span class="inline-flex h-9 items-center justify-center rounded-md border border-input px-3 text-muted-foreground opacity-50">
+                下一页
+              </span>
+            )}
+          </div>
+        )}
+      </nav>
+    )}
 
     <!-- 批量绑定服务 Modal -->
     <div id="batchBindServiceModal" class="fixed inset-0 z-50 hidden items-center justify-center">
