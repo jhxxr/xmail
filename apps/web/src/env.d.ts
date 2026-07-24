@@ -1,12 +1,21 @@
 /// <reference types="astro/client" />
 
+type XMailEnv = {
+  DB: D1Database
+  JWT_SECRET: string
+  ADMIN_PASSWORD: string
+  MAIL_DOMAIN: string
+  ENCRYPTION_KEY?: string
+  MS_CLIENT_ID?: string
+  MS_REDIRECT_URI?: string
+}
+
 declare namespace App {
   interface Locals {
-    runtime: import("@astrojs/cloudflare").Runtime<{
-      DB: D1Database
-      JWT_SECRET: string
-      ADMIN_PASSWORD: string // 管理员初始密码
-      MAIL_DOMAIN: string // 邮箱域名
-    }>
+    runtime: {
+      env: XMailEnv
+      cf: CfProperties
+      ctx: ExecutionContext
+    }
   }
 }

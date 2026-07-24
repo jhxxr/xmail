@@ -213,6 +213,27 @@ export const apiKeys = sqliteTable("api_keys", {
   revokedAt: integer("revoked_at"),
 })
 
+// OAuth 收信账号（Outlook/微软 Graph 等，按需拉信不落库）
+export const oauthMailAccounts = sqliteTable("oauth_mail_accounts", {
+  id: text("id").primaryKey(),
+  email: text("email").notNull().unique(),
+  provider: text("provider").notNull().default("outlook"),
+  clientId: text("client_id").notNull(),
+  encryptedRefreshToken: text("encrypted_refresh_token").notNull(),
+  encryptedPassword: text("encrypted_password"),
+  shareToken: text("share_token").notNull().unique(),
+  note: text("note"),
+  status: text("status").notNull().default("active"), // active | auth_error | disabled
+  lastError: text("last_error"),
+  lastSyncAt: integer("last_sync_at"),
+  refreshTokenUpdatedAt: integer("refresh_token_updated_at"),
+  createdBy: text("created_by").references(() => admins.id),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (t) => ({
+  statusIdx: index("idx_oauth_mail_accounts_status").on(t.status),
+}))
+
 // 类型导出
 export type Admin = typeof admins.$inferSelect
 export type InsertAdmin = typeof admins.$inferInsert
@@ -244,3 +265,5 @@ export type ExternalAccountService = typeof externalAccountServices.$inferSelect
 export type InsertExternalAccountService = typeof externalAccountServices.$inferInsert
 export type ApiKey = typeof apiKeys.$inferSelect
 export type InsertApiKey = typeof apiKeys.$inferInsert
+export type OauthMailAccount = typeof oauthMailAccounts.$inferSelect
+export type InsertOauthMailAccount = typeof oauthMailAccounts.$inferInsert

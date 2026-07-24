@@ -1,7 +1,7 @@
 ---
 import Layout from "../layouts/Layout.astro"
-import { createDB, getUserByToken, getMailbox, listMailboxes, verifyMailboxPassword, updateMailboxLastLogin, updateUserLastLogin, getEmailsByMailbox, getMailboxStats, getMailboxServicesWithDetails, deleteMailbox, toggleEmailStar, getEmail, listStarredEmails, checkUserHasAccessToMailbox } from "database"
-import { verifyToken, generateUserToken } from "../lib/auth"
+import { createDB, getUserByToken, getMailbox, listMailboxes, verifyMailboxPassword, updateMailboxLastLogin, updateUserLastLogin, getEmailsByMailbox, getMailboxStats, getMailboxServicesWithDetails, deleteMailbox, toggleEmailStar, getEmail, listStarredEmails, checkUserHasAccessToMailbox, getOauthMailAccountByShareToken } from "database"
+import { verifyToken, generateUserToken, generateOauthAccountToken } from "../lib/auth"
 import { formatDate, extractPreview, extractVerificationCode } from "../lib/utils"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card"
 import { Button } from "../components/ui/button"
@@ -21,6 +21,24 @@ let emails: Awaited<ReturnType<typeof getEmailsByMailbox>> = []
 let stats = { total: 0, unread: 0 }
 let error = ""
 let message = ""
+
+// 0. OAuth 邮箱分享令牌
+const oauthKey = Astro.url.searchParams.get("oauth_key")
+if (oauthKey) {
+  const oauthAccount = await getOauthMailAccountByShareToken(db, oauthKey)
+  if (oauthAccount && oauthAccount.status !== "disabled") {
+    const oauthSession = await generateOauthAccountToken(oauthAccount.id, jwtSecret)
+    Astro.cookies.set("oauth_token", oauthSession, {
+      httpOnly: true,
+      secure: import.meta.env.PROD,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 30,
+    })
+    return Astro.redirect(`/oauth-inbox?account=${encodeURIComponent(oauthAccount.id)}`)
+  }
+  error = "无效的 OAuth 访问链接或账号已停用"
+}
 
 // 1. 检查 URL 参数中的 access_token (快捷访问令牌)
 const accessToken = Astro.url.searchParams.get("access_token")
@@ -45,6 +63,21 @@ if (accessToken) {
 // 2. 检查 URL 参数中的 key (用户 token)
 const urlKey = Astro.url.searchParams.get("key")
 if (urlKey) {
+  // OAuth share tokens also work via ?key= for convenience
+  if (urlKey.startsWith("xmail_oauth_")) {
+    const oauthAccount = await getOauthMailAccountByShareToken(db, urlKey)
+    if (oauthAccount && oauthAccount.status !== "disabled") {
+      const oauthSession = await generateOauthAccountToken(oauthAccount.id, jwtSecret)
+      Astro.cookies.set("oauth_token", oauthSession, {
+        httpOnly: true,
+        secure: import.meta.env.PROD,
+        sameSite: "lax",
+        path: "/",
+        maxAge: 60 * 60 * 24 * 30,
+      })
+      return Astro.redirect(`/oauth-inbox?account=${encodeURIComponent(oauthAccount.id)}`)
+    }
+  }
   const user = await getUserByToken(db, urlKey)
   if (user) {
     userId = user.id

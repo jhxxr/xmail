@@ -1,14 +1,15 @@
 # XMail API 文档
 
-XMail 提供完整的 REST API 和 MCP (Model Context Protocol) 接口，支持邮箱管理、验证码提取、邮件查询等功能。
+XMail 提供 REST API 与 MCP 接口，覆盖临时邮箱、验证码提取、OAuth 收信，以及 **cloudflare_temp_email 兼容路径**（便于接入基于该项目 API 格式的外部工具）。
 
-## 认证方式
+## 认证方式总览
 
-所有 API 请求需要在 HTTP Header 中携带 API Key：
-
-```
-Authorization: Bearer sk_live_xxxxxxxx.yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
-```
+| 场景 | 认证方式 | 适用路径 |
+| --- | --- | --- |
+| 管理员 / 自动化 | `Authorization: Bearer sk_live_...` | `/api/v1/admin/*`、`/api/mcp*`、CF 兼容管理员接口 |
+| 管理员（CF 风格） | `x-admin-auth: <ADMIN_PASSWORD 或 sk_live_...>` | `/admin/new_address`、`/admin/mails` 等 |
+| 单邮箱（CF 风格） | `Authorization: Bearer <Address JWT>` | `/api/mails`、`/api/mail/*`、`/api/parsed_*`、`/api/otp` 等 |
+| OAuth 分享 | `key` / `oauth_key` 或 `Bearer xmail_oauth_...` | `/api/v1/oauth/*` |
 
 ### 创建 API Key
 
@@ -18,24 +19,44 @@ Authorization: Bearer sk_live_xxxxxxxx.yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
 4. **立即复制并保存完整的 Key**（格式：`sk_live_xxxxxxxx.yyyyyyyy...`）
 5. Key 只会显示一次，无法再次查看
 
+请求时：
+
+```
+Authorization: Bearer sk_live_xxxxxxxx.yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
+```
+
 ### 撤销和删除 API Key
 
 - **撤销**：在 API Key 管理页面点击"撤销"按钮，Key 将立即失效且无法恢复
 - **删除**：点击删除图标可永久移除该 Key 的记录
 
-## 管理员 API
+### Address JWT（CF 兼容）
+
+通过 `POST /admin/new_address` 或 `POST /api/new_address` 创建邮箱时返回 `jwt`。之后：
+
+```
+Authorization: Bearer <jwt>
+```
+
+---
+
+## 管理员 API（`/api/v1/admin/*`）
+
+认证：`Authorization: Bearer sk_live_...`
 
 ### 获取最新验证码
 
-获取指定邮箱最新收到的验证码。该 API **始终返回完整的邮件内容**（text 和 html 字段），方便 AI 进行二次分析。
+优先查本地 D1（先扫标题摘要，需要时再读正文）；若本地无邮件则回退到同地址 OAuth 账号（Microsoft Graph）。
 
 **端点：** `GET /api/v1/admin/verification-code`
 
 **查询参数：**
+
 - `mailbox` (必需): 邮箱地址
 - `seconds` (可选): 查询最近 N 秒内的邮件，默认 600 秒，范围 0-86400
 
 **响应示例（找到验证码）：**
+
 ```json
 {
   "success": true,
@@ -44,12 +65,14 @@ Authorization: Bearer sk_live_xxxxxxxx.yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
     "subject": "Your verification code",
     "sender": "noreply@example.com",
     "sender_name": "Example Service",
-    "received_at": 1733385600
+    "received_at": 1733385600,
+    "source": "local"
   }
 }
 ```
 
-**响应示例（未找到验证码）：**
+**响应示例（未找到）：**
+
 ```json
 {
   "success": true,
@@ -61,106 +84,47 @@ Authorization: Bearer sk_live_xxxxxxxx.yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
       "sender": "hello@example.com",
       "text_snippet": "Welcome! Here is some information...",
       "received_at": 1733385500
-    }
+    },
+    "source": "local"
   }
 }
 ```
 
-**错误响应：**
-```json
-{
-  "success": false,
-  "error": "Unauthorized"
-}
-```
-
-### 使用示例
-
 **cURL:**
+
 ```bash
 curl -H "Authorization: Bearer sk_live_abc12345.xyz..." \
   "https://your-xmail-domain.com/api/v1/admin/verification-code?mailbox=test@example.com&seconds=300"
 ```
 
 **Python:**
+
 ```python
 import requests
 
 api_key = "sk_live_abc12345.xyz..."
-mailbox = "test@example.com"
-
 response = requests.get(
     "https://your-xmail-domain.com/api/v1/admin/verification-code",
     headers={"Authorization": f"Bearer {api_key}"},
-    params={"mailbox": mailbox, "seconds": 600}
+    params={"mailbox": "test@example.com", "seconds": 600},
 )
-
 data = response.json()
-if data["success"] and data["data"]["code"]:
-    print(f"验证码: {data['data']['code']}")
-else:
-    print("未找到验证码")
-```
-
-**JavaScript/Node.js:**
-```javascript
-const API_KEY = "sk_live_abc12345.xyz..."
-const mailbox = "test@example.com"
-
-const response = await fetch(
-  `https://your-xmail-domain.com/api/v1/admin/verification-code?mailbox=${mailbox}&seconds=600`,
-  {
-    headers: {
-      "Authorization": `Bearer ${API_KEY}`
-    }
-  }
-)
-
-const data = await response.json()
-if (data.success && data.data.code) {
-  console.log("验证码:", data.data.code)
-} else {
-  console.log("未找到验证码")
-}
-```
-
-**AI 工具调用 (OpenAI Function Calling):**
-```json
-{
-  "name": "get_verification_code",
-  "description": "Get the latest verification code from a mailbox",
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "mailbox": {
-        "type": "string",
-        "description": "The email address to check"
-      },
-      "seconds": {
-        "type": "integer",
-        "description": "Look back N seconds (default 600, max 86400)",
-        "default": 600
-      }
-    },
-    "required": ["mailbox"]
-  }
-}
+print(data["data"].get("code"))
 ```
 
 ### 创建邮箱（返回密码）
 
-通过 API 创建邮箱并返回密码，适合无需操作网页的自动化流程。可传入完整地址 `address`，或用 `local_part` + `domain` 组合。未传 `domain` 时使用默认域名（可通过下方“获取邮箱后缀”接口获取）。
-
 **端点：** `POST /api/v1/admin/mailbox/create`
 
 **请求体：**
-- `address` (可选): 完整邮箱地址，例如 `user@example.com`
-- `local_part` (可选): 邮箱前缀，例如 `user`（与 `domain` 组合）
-- `domain` (可选): 邮箱域名后缀，例如 `example.com`
-- `note` (可选): 备注
-- `password` (可选): 自定义密码；不传则自动生成
 
-**响应示例：**
+- `address` (可选): 完整邮箱
+- `local_part` / `domain` (可选): 组合创建
+- `note` (可选)
+- `password` (可选): 自定义密码
+
+**响应：**
+
 ```json
 {
   "success": true,
@@ -171,34 +135,17 @@ if (data.success && data.data.code) {
 }
 ```
 
-**错误响应：**
-```json
-{
-  "success": false,
-  "error": "Mailbox already exists"
-}
-```
-
-**cURL:**
 ```bash
 curl -X POST "https://your-xmail-domain.com/api/v1/admin/mailbox/create" \
   -H "Authorization: Bearer sk_live_abc12345.xyz..." \
   -H "Content-Type: application/json" \
-  -d '{
-    "local_part": "user",
-    "domain": "example.com",
-    "note": "API 创建",
-    "password": "MyStrongPassword123"
-  }'
+  -d '{"local_part":"user","domain":"example.com","note":"API 创建"}'
 ```
 
 ### 获取邮箱后缀（域名列表）
 
-获取系统中可用的邮箱域名后缀，以及默认域名。
-
 **端点：** `GET /api/v1/admin/mailbox/domains`
 
-**响应示例：**
 ```json
 {
   "success": true,
@@ -209,15 +156,303 @@ curl -X POST "https://your-xmail-domain.com/api/v1/admin/mailbox/create" \
 }
 ```
 
-**cURL:**
+---
+
+## Cloudflare Temp Email 兼容 API
+
+为方便接入基于 [cloudflare_temp_email](https://github.com/dreamhunter2333/cloudflare_temp_email) 的外部工具，XMail 提供路径与响应形状兼容层。原有 `/api/v1/*` 接口保持不变。
+
+### 认证对照
+
+| 场景 | Header | 说明 |
+| --- | --- | --- |
+| 地址 JWT | `Authorization: Bearer <jwt>` | 创建邮箱时返回，只能访问该邮箱 |
+| 管理员 | `x-admin-auth: <ADMIN_PASSWORD>` | 与 CF 文档一致 |
+| 管理员（XMail 扩展） | `x-admin-auth: sk_live_...` 或 `Authorization: Bearer sk_live_...` | 可用 API Key 代替明文密码 |
+
+### 创建邮箱
+
+```http
+POST /admin/new_address
+POST /api/new_address
+```
+
 ```bash
-curl -H "Authorization: Bearer sk_live_abc12345.xyz..." \
-  "https://your-xmail-domain.com/api/v1/admin/mailbox/domains"
+curl -X POST "https://your-domain/admin/new_address" \
+  -H "x-admin-auth: $ADMIN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"alice","domain":"m.xinr.de"}'
+```
+
+- `name` 可省略：随机生成本地部分
+- `domain` 可省略：使用系统默认域名
+
+**响应：**
+
+```json
+{
+  "jwt": "<Address JWT>",
+  "address": "alice@m.xinr.de",
+  "address_id": "alice@m.xinr.de",
+  "password": "随机密码",
+  "success": true,
+  "data": {
+    "address": "alice@m.xinr.de",
+    "password": "随机密码",
+    "jwt": "<Address JWT>"
+  }
+}
+```
+
+### 列邮件 / 读邮件
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/mails?limit=20&offset=0` | 列表（摘要，不含全文） |
+| GET | `/api/mail/:id` | 详情（含 text/html） |
+| GET | `/api/mails/:id` | 同上（别名）；DELETE 可删信 |
+| GET | `/api/parsed_mails?limit=20&offset=0` | 解析后列表（subject/sender） |
+| GET | `/api/parsed_mails?full=1` | 解析后列表并带正文 |
+| GET | `/api/parsed_mail/:id` | 解析后详情（含正文） |
+
+**列表响应：**
+
+```json
+{
+  "results": [
+    {
+      "id": "xxx",
+      "message_id": "xxx",
+      "source": "from@example.com",
+      "address": "alice@m.xinr.de",
+      "created_at": "2026-07-23T12:00:00.000Z",
+      "subject": "Your code is 123456",
+      "sender": "Service <from@example.com>",
+      "is_read": false,
+      "is_starred": false
+    }
+  ],
+  "count": 12
+}
+```
+
+约定：
+
+- `limit`：1–100（默认 20）
+- `offset`：≥ 0（默认 0）
+- `count`：**仅 `offset=0` 时计算**，否则为 `0`
+- 列表**不返回**大字段 `html`/`text`；详情接口返回正文
+
+```bash
+curl -H "Authorization: Bearer $JWT" \
+  "https://your-domain/api/mails?limit=20&offset=0"
+
+curl -H "Authorization: Bearer $JWT" \
+  "https://your-domain/api/mail/<id>"
+
+curl -H "Authorization: Bearer $JWT" \
+  "https://your-domain/api/parsed_mails?limit=20&offset=0"
+```
+
+### 验证码
+
+```bash
+# 地址 JWT
+curl -H "Authorization: Bearer $JWT" \
+  "https://your-domain/api/otp?seconds=600"
+
+# 管理员 API Key（原路径）
+curl -H "Authorization: Bearer sk_live_..." \
+  "https://your-domain/api/v1/admin/verification-code?mailbox=alice@m.xinr.de&seconds=600"
+```
+
+`/api/otp` 响应示例：
+
+```json
+{
+  "success": true,
+  "code": "123456",
+  "subject": "...",
+  "sender": "...",
+  "received_at": 1733385600,
+  "mail_id": "..."
+}
+```
+
+### 其它兼容端点
+
+| 方法 | 路径 | 认证 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/api/settings` | Address JWT | `{ address, send_balance: 0 }` |
+| DELETE | `/api/mails/:id` | Address JWT | 删除一封邮件 |
+| DELETE | `/api/clear_inbox` | Address JWT | 清空该地址全部收件 |
+| DELETE | `/api/delete_address` | Address JWT | 软删除邮箱并清空邮件 |
+| GET | `/admin/mails?address=&limit=&offset=` | 管理员 | 管理员列邮件 |
+| DELETE | `/admin/mails/:id` | 管理员 | 管理员删邮件 |
+| GET | `/admin/mails/:id` | 管理员 | 管理员读邮件详情 |
+
+### 读信性能
+
+1. **摘要列查询**（`listEmailSummaries`）：不读 `html`/`text`
+2. 索引 `idx_emails_mailbox_created (mailbox_address, created_at)`
+3. **count 仅首页**
+4. 验证码：先扫 subject，需要时再拉单封正文
+
+入库时 Email Worker 已解析 MIME，列表比「只存 raw MIME、读取时再解析」更轻。
+
+### Python 示例（与 CF 文档同构）
+
+```python
+import requests
+
+BASE = "https://your-domain"
+ADMIN = "your-admin-password-or-sk_live_key"
+
+r = requests.post(
+    f"{BASE}/admin/new_address",
+    json={"name": "test01", "domain": "m.xinr.de"},
+    headers={"x-admin-auth": ADMIN, "Content-Type": "application/json"},
+)
+data = r.json()
+jwt, address = data["jwt"], data["address"]
+print(address, data.get("password"))
+
+mails = requests.get(
+    f"{BASE}/api/mails",
+    params={"limit": 20, "offset": 0},
+    headers={"Authorization": f"Bearer {jwt}"},
+).json()
+print("count=", mails.get("count"), "page=", len(mails.get("results", [])))
+
+otp = requests.get(
+    f"{BASE}/api/otp",
+    params={"seconds": 600},
+    headers={"Authorization": f"Bearer {jwt}"},
+).json()
+print("code=", otp.get("code"))
+```
+
+### 从 cloudflare_temp_email 迁移注意
+
+| 项目 | CF temp-email | XMail |
+| --- | --- | --- |
+| 邮件存储 | `raw_mails` 存 raw MIME | `emails` 表存已解析 text/html |
+| 列表字段 | 默认带 `raw` | 列表为摘要；详情带 text/html |
+| OTP | 无独立接口，靠 `metadata` 或自解析 | 提供 `/api/otp` + 原 admin 路径 |
+| 地址 ID | 数字 `address_id` | 字符串（邮箱地址本身） |
+| 创建鉴权 | `x-admin-auth` 管理员密码 | 同左，并支持 `sk_live_` API Key |
+
+字段多出来的 XMail 扩展（如 `success`/`data`/`is_read`）可安全忽略；核心 `jwt`/`address`/`results`/`count` 与常见 CF 客户端兼容。
+
+---
+
+## OAuth 邮箱（Microsoft Graph）
+
+导入 Outlook/Hotmail 等微软账号后，通过 Graph **按需实时拉信**（不写入 D1）。每个账号有独立分享令牌 `xmail_oauth_…`，访问 `/?oauth_key=<token>` 即可打开收件箱。
+
+导入行格式（与 outlookEmail 兼容）：
+
+```text
+email----password----client_id----refresh_token
+email----client_id----refresh_token
+```
+
+`client_id` 与 `refresh_token` 顺序可自动识别（UUID 视为 client_id）。
+
+### 批量导入
+
+**端点：** `POST /api/v1/admin/oauth-accounts`  
+**认证：** API Key 或管理员 Cookie  
+**Body (JSON)：**
+
+```json
+{
+  "text": "user@outlook.com----pass----xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx----M.C5...",
+  "note": "optional"
+}
+```
+
+同一邮箱再次导入会**更新** `client_id` / refresh_token 并恢复 `active`（分享令牌不变），响应字段：`added` / `updated` / `skipped` / `parse_errors`。
+### 列出账号
+
+**端点：** `GET /api/v1/admin/oauth-accounts`  
+响应不含 refresh_token。
+
+### 删除 / 轮换分享令牌
+
+- `DELETE /api/v1/admin/oauth-accounts/:id`
+- `POST /api/v1/admin/oauth-accounts/:id` body `{"action":"regenerate-token"}`
+
+### 实时邮件列表
+
+**端点：** `GET /api/v1/oauth/emails`  
+**认证（其一）：**
+
+- Query `key=` / `oauth_key=`（分享令牌）
+- `Authorization: Bearer xmail_oauth_…`
+- `Authorization: Bearer sk_live_…` + `account=` 或 `email=`
+- Cookie `oauth_token`（分享链接登录后）
+
+**查询参数：** `folder`（`inbox`|`junkemail`|`all`）、`top`、`skip`  
+`folder=all` 时并行拉收件箱+垃圾箱并按时间合并。
+
+### 邮件详情
+
+**端点：** `GET /api/v1/oauth/emails/:messageId`  
+认证同上。
+
+### 附件
+
+- `GET /api/v1/oauth/emails/:messageId/attachments` — 附件元数据列表  
+- `GET /api/v1/oauth/emails/:messageId/attachments/:attachmentId` — 下载附件  
+
+### 原始 MIME
+
+**端点：** `GET /api/v1/oauth/emails/:messageId/raw`  
+返回 `.eml`（`message/rfc822`）。
+
+### 获取验证码（OAuth）
+
+**端点：** `GET /api/v1/oauth/verification-code`  
+**查询：** `key` / `email` / `account`、`seconds`（默认 600）、`folder`（默认 **`all`**）
+
+现有 `GET /api/v1/admin/verification-code?mailbox=` 在本地 D1 无邮件时，会自动回退到同地址的 OAuth 账号走 Graph（默认搜收件箱+垃圾箱）。
+
+### 测活 / 重新授权
+
+- `POST /api/v1/admin/oauth-accounts/:id` `{"action":"probe"}` — Graph 测活  
+- `POST /api/v1/admin/oauth-accounts/:id` `{"action":"reauthorize","client_id":"…","refresh_token":"…"}` — 更新凭证并测活  
+- 批量导入 / 微软授权回调后会自动测活  
+
+### MCP 工具（OAuth）
+
+| 工具 | 说明 |
+| --- | --- |
+| `import_oauth_accounts` | 批量导入 / 更新 OAuth 凭证（含测活） |
+| `list_oauth_accounts` | 列表（含 share_token，不含 RT） |
+| `get_oauth_verification_code` | Graph 实时取验证码（默认 folder=all） |
+| `list_oauth_emails` | Graph 实时邮件列表 |
+| `delete_oauth_account` | 删除账号 |
+| `regenerate_oauth_share_token` | 轮换分享令牌 |
+| `probe_oauth_account` | 测活（支持 `all: true`） |
+
+`get_verification_code` 在本地无邮件时也会自动回退到同地址 OAuth 账号。
+
+### 网页微软授权
+
+1. 配置 Secrets：`ENCRYPTION_KEY`、`MS_CLIENT_ID`，可选 `MS_REDIRECT_URI`
+2. Azure 应用：公共客户端，委托权限 `offline_access` + `Mail.Read`，重定向 URI 与站点一致
+3. 管理后台「OAuth 邮箱」→「微软授权导入」
+
+数据库迁移：
+
+```bash
+pnpm --filter web exec wrangler d1 execute xmail-db --remote --file=../../packages/database/migrations/0002_oauth_mail_accounts.sql
 ```
 
 ## MCP (Model Context Protocol) API
 
-XMail 完整支持 MCP 协议，提供 50+ 个工具供 AI 助手调用。详细使用指南请参考 [MCP.md](MCP.md)。
+XMail 完整支持 MCP 协议，提供 54 个工具供 AI 助手调用。详细使用指南请参考 [MCP.md](MCP.md)。
 
 ### 获取工具列表
 
@@ -833,3 +1068,4 @@ batchRegister(10)
 - [MCP.md](MCP.md) - MCP 服务器完整使用指南
 - [mcp-tools.ts](apps/web/src/lib/mcp-tools.ts) - 所有工具的详细定义
 - [utils.ts](apps/web/src/lib/utils.ts) - 验证码提取算法实现
+

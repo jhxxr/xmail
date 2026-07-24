@@ -12,6 +12,7 @@ Model Context Protocol (MCP) 是一个开放标准，用于让 AI 应用（如 C
 - 分配用户权限
 - 管理服务模板
 - 执行邮件操作（标记已读、星标、删除等）
+- 导入 Outlook OAuth 账号并实时拉取验证码（Microsoft Graph）
 
 ## 快速开始
 
@@ -116,7 +117,7 @@ claude mcp get xmail
 列出 XMail 中所有可用的工具
 ```
 
-如果配置成功，Claude 会列出所有 50+ 个可用工具。
+如果配置成功，Claude 会列出所有 54 个可用工具。
 
 ## 核心功能与使用场景
 
@@ -526,7 +527,19 @@ Claude 会依次调用：
 - `update_service_expiration` - 更新服务过期时间
 - `batch_bind_services_to_mailboxes` - 批量绑定服务到邮箱
 
-**总计：50+ 个工具**
+### OAuth 邮箱（Microsoft Graph）
+
+- `import_oauth_accounts` - 批量导入/更新 Outlook OAuth 账号（`email----client_id----refresh_token`）
+- `list_oauth_accounts` - 列出 OAuth 账号与分享令牌
+- `get_oauth_verification_code` - 实时拉信并提取验证码（email / share_token / account_id）
+- `list_oauth_emails` - 实时列出收件箱/垃圾邮件
+- `delete_oauth_account` - 删除 OAuth 账号
+- `regenerate_oauth_share_token` - 轮换分享令牌
+- `probe_oauth_account` - 测活 Graph 凭证（支持 all）
+
+说明：`get_verification_code` 在本地 D1 无邮件时，会自动回退到同地址的 OAuth 账号。
+
+**总计：54 个工具**
 
 ## API 端点
 
@@ -789,6 +802,18 @@ Claude 会调用统计和日志工具生成完整报告。
 ```
 
 Claude 会使用 `batch_bind_services_to_mailboxes` 和自定义服务功能完成配置。
+
+### OAuth Outlook 批量取码
+
+```
+导入这些 Outlook 账号：
+user1@outlook.com----client_id----refresh_token
+user2@hotmail.com----client_id----refresh_token
+
+然后轮询 user1@outlook.com 最近 5 分钟的验证码。
+```
+
+Claude 会调用 `import_oauth_accounts` 与 `get_oauth_verification_code`（或 `get_verification_code` 回退路径）。
 
 ### 批量自动化脚本
 

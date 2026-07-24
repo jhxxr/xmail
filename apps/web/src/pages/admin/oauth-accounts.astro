@@ -1,0 +1,424 @@
+---
+import AdminLayout from "../../layouts/AdminLayout.astro"
+import {
+  createDB,
+  listOauthMailAccounts,
+  createOauthMailAccountsBulk,
+  deleteOauthMailAccount,
+  regenerateOauthShareToken,
+  getAdminById,
+  createLog,
+  updateOauthMailAccount,
+} from "database"
+import { verifyToken } from "../../lib/auth"
+import { encryptSecret, isEncryptionKeyConfigured } from "../../lib/crypto"
+import { parseOutlookImportLines } from "../../lib/oauth-import"
+import {
+  invalidateAccessTokenCache,
+  probeStoredAccount,
+  probeStoredAccountsBatch,
+} from "../../lib/ms-graph"
+// 注意：导入不自动测活；probe* 仅用于手动「测活 / 批量测活」
+import { formatDate } from "../../lib/utils"
+import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
+import { Button } from "../../components/ui/button"
+import { Input } from "../../components/ui/input"
+import { Badge } from "../../components/ui/badge"
+import { Mail, Trash2, Copy, RefreshCw, ExternalLink, KeyRound } from "lucide-react"
+
+const db = createDB(Astro.locals.runtime.env.DB)
+const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
+const encryptionKey = Astro.locals.runtime.env.ENCRYPTION_KEY
+
+const token = Astro.cookies.get("admin_token")?.value
+if (!token) return Astro.redirect("/admin/login")
+const payload = await verifyToken(token, jwtSecret)
+if (!payload || payload.type !== "admin") return Astro.redirect("/admin/login")
+const admin = await getAdminById(db, payload.id)
+if (!admin) return Astro.redirect("/admin/login")
+
+let message = Astro.url.searchParams.get("message") || ""
+let error = Astro.url.searchParams.get("error") || ""
+let messageType: "success" | "error" = error ? "error" : "success"
+if (error) message = error
+
+if (Astro.request.method === "POST") {
+  const formData = await Astro.request.formData()
+  const action = formData.get("action")?.toString()
+
+  try {
+    if (action === "import") {
+      if (!isEncryptionKeyConfigured(encryptionKey)) {
+        message = "请先配置 ENCRYPTION_KEY secret"
+        messageType = "error"
+      } else {
+        const text = formData.get("text")?.toString() || ""
+        const note = formData.get("note")?.toString() || null
+        const parsed = parseOutlookImportLines(text)
+        if (parsed.accounts.length === 0) {
+          message =
+            "没有可导入的账号。" +
+            (parsed.errors[0] ? ` 示例错误: 第${parsed.errors[0].line}行 ${parsed.errors[0].message}` : "")
+          messageType = "error"
+        } else {
+          const rows = []
+          for (const account of parsed.accounts) {
+            rows.push({
+              email: account.email,
+              clientId: account.clientId,
+              encryptedRefreshToken: await encryptSecret(account.refreshToken, encryptionKey!),
+              encryptedPassword: account.password
+                ? await encryptSecret(account.password, encryptionKey!)
+                : null,
+              note,
+              provider: "outlook",
+            })
+          }
+          const result = await createOauthMailAccountsBulk(db, rows, admin.id)
+          for (const id of result.credentialChangedIds) {
+            invalidateAccessTokenCache(id)
+          }
+          // 导入不做测活，避免大批量触发 Worker/微软限流
+          await createLog(db, {
+            adminId: admin.id,
+            action: "oauth_import",
+            target: "oauth_mail_accounts",
+            details: {
+              added: result.added.length,
+              updated: result.updated.length,
+              skipped: result.skipped.length,
+            },
+          })
+          message = `导入完成：新增 ${result.added.length}，更新 ${result.updated.length}，跳过 ${result.skipped.length}（未测活，需要时点「测活」）`
+          if (parsed.errors.length) {
+            message += `；解析失败 ${parsed.errors.length} 行`
+          }
+          messageType = "success"
+        }
+      }
+    } else if (action === "probe") {
+      const id = formData.get("id")?.toString()
+      if (!id) {
+        message = "缺少账号 id"
+        messageType = "error"
+      } else if (!isEncryptionKeyConfigured(encryptionKey)) {
+        message = "ENCRYPTION_KEY 未配置，无法解密 refresh_token"
+        messageType = "error"
+      } else {
+        const account = (await listOauthMailAccounts(db)).find((a) => a.id === id)
+        if (!account) {
+          message = "账号不存在"
+          messageType = "error"
+        } else {
+          const probe = await probeStoredAccount(db, account, encryptionKey!)
+          if (probe.ok && probe.graphMailOk !== false) {
+            message = `测活成功（Graph 可读信）: ${account.email}${probe.attemptLabel ? ` [${probe.attemptLabel}]` : ""}`
+            messageType = "success"
+          } else if (!probe.ok && probe.tokenKind === "imap") {
+            message = `测活：${account.email} 的 refresh_token 有效，但是 IMAP 授权（卡密常见）。本站只能 Graph 读信，无法用该卡密收信。${probe.error || probe.warning || ""}`
+            messageType = "error"
+          } else if (!probe.ok && /Graph|401|Mail\.Read|IMAP/i.test(probe.error || "")) {
+            message = `测活：${account.email} — ${probe.error || "令牌无法用于 Graph 读信（多为 IMAP 卡密）"}`
+            messageType = "error"
+          } else {
+            message = `测活失败: ${account.email} — ${probe.error || "未知错误"}`
+            messageType = "error"
+          }
+        }
+      }
+    } else if (action === "probe_all") {
+      if (!isEncryptionKeyConfigured(encryptionKey)) {
+        message = "ENCRYPTION_KEY 未配置，无法批量测活"
+        messageType = "error"
+      } else {
+        const all = await listOauthMailAccounts(db)
+        // 串行/低并发，避免触发 Worker 与微软限流
+        const probe = await probeStoredAccountsBatch(db, all, encryptionKey!, 1)
+        message = `批量测活完成：成功 ${probe.ok}，失败 ${probe.failed}（大批量请分批手动测）`
+        if (probe.errors.length) {
+          message += `；示例: ${probe.errors[0].email} ${probe.errors[0].error}`
+        }
+        messageType = probe.failed > 0 && probe.ok === 0 ? "error" : "success"
+      }
+    } else if (action === "delete") {
+      const id = formData.get("id")?.toString()
+      if (id) {
+        const accounts = await listOauthMailAccounts(db)
+        const target = accounts.find((a) => a.id === id)
+        await deleteOauthMailAccount(db, id)
+        invalidateAccessTokenCache(id)
+        await createLog(db, {
+          adminId: admin.id,
+          action: "oauth_delete",
+          target: target?.email || id,
+        })
+        message = "已删除"
+        messageType = "success"
+      }
+    } else if (action === "regenerate") {
+      const id = formData.get("id")?.toString()
+      if (id) {
+        const shareToken = await regenerateOauthShareToken(db, id)
+        if (shareToken) {
+          await createLog(db, {
+            adminId: admin.id,
+            action: "oauth_regenerate_token",
+            target: id,
+          })
+          message = "分享令牌已轮换"
+          messageType = "success"
+        }
+      }
+    } else if (action === "toggle_status") {
+      const id = formData.get("id")?.toString()
+      const status = formData.get("status")?.toString()
+      if (id && status && ["active", "disabled"].includes(status)) {
+        await updateOauthMailAccount(db, id, { status })
+        message = status === "active" ? "已启用" : "已停用"
+        messageType = "success"
+      }
+    }
+  } catch (e) {
+    message = e instanceof Error ? e.message : "操作失败"
+    messageType = "error"
+  }
+}
+
+let accounts: Awaited<ReturnType<typeof listOauthMailAccounts>> = []
+try {
+  accounts = await listOauthMailAccounts(db)
+} catch (e) {
+  const detail = e instanceof Error ? e.message : String(e)
+  // Common when migration 0002_oauth_mail_accounts.sql was never applied to D1
+  if (/no such table|oauth_mail_accounts/i.test(detail)) {
+    message =
+      "数据库缺少 oauth_mail_accounts 表。请执行 packages/database/migrations/0002_oauth_mail_accounts.sql 到 D1 后刷新。"
+  } else {
+    message = `加载账号列表失败：${detail}`
+  }
+  messageType = "error"
+}
+const origin = Astro.url.origin
+const encryptionReady = isEncryptionKeyConfigured(encryptionKey)
+const msClientConfigured = Boolean(Astro.locals.runtime.env.MS_CLIENT_ID)
+---
+
+<AdminLayout title="OAuth 邮箱">
+  <div class="space-y-6">
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div>
+        <h1 class="text-2xl font-bold">OAuth 邮箱</h1>
+        <p class="text-muted-foreground text-sm mt-1">
+          导入 Outlook/Hotmail 等微软账号，通过 Graph 按需收信。每个账号有独立分享令牌。
+        </p>
+      </div>
+      <div class="flex gap-2">
+        {msClientConfigured ? (
+          <a href="/api/oauth/microsoft/authorize">
+            <Button type="button" variant="outline">
+              <ExternalLink className="w-4 h-4 mr-2" />
+              微软授权导入
+            </Button>
+          </a>
+        ) : (
+          <Button type="button" variant="outline" disabled title="请配置 MS_CLIENT_ID">
+            <ExternalLink className="w-4 h-4 mr-2" />
+            微软授权导入
+          </Button>
+        )}
+      </div>
+    </div>
+
+    {!encryptionReady && (
+      <div class="rounded-md border border-destructive/50 bg-destructive/10 text-destructive px-4 py-3 text-sm">
+        未配置有效的 <code>ENCRYPTION_KEY</code>，无法安全存储 refresh_token。请在 Cloudflare Pages secrets 中设置。
+      </div>
+    )}
+
+    {message && (
+      <div
+        class={`rounded-md px-4 py-3 text-sm ${
+          messageType === "error"
+            ? "border border-destructive/50 bg-destructive/10 text-destructive"
+            : "border border-primary/30 bg-primary/10 text-foreground"
+        }`}
+      >
+        {message}
+      </div>
+    )}
+
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">批量导入</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <form method="POST" class="space-y-3">
+          <input type="hidden" name="action" value="import" />
+          <p class="text-sm text-muted-foreground">
+            支持卡密兑换格式（自动识别字段）：
+            <code class="text-xs">email----password----client_id----refresh_token</code>
+            。也可
+            <code class="text-xs">email----client_id----refresh_token</code>
+            ；client_id 与 refresh_token 顺序可自动识别。
+            已存在邮箱会更新凭证（分享令牌不变）。
+            <strong class="text-foreground">导入不测活</strong>，大批量不会打微软接口；需要时点「测活」。
+          </p>
+          <textarea
+            name="text"
+            rows={6}
+            class="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono"
+            placeholder={"user@outlook.com----pass----xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx----M.C5..."}
+            required
+          ></textarea>
+          <Input name="note" placeholder="备注（可选，应用到本次导入的全部账号）" />
+          <Button type="submit" disabled={!encryptionReady}>导入账号</Button>
+        </form>
+      </CardContent>
+    </Card>
+
+    <Card>
+      <CardHeader class="flex flex-row items-center justify-between space-y-0">
+        <CardTitle className="text-base">账号列表（{accounts.length}）</CardTitle>
+        {accounts.length > 0 && encryptionReady && (
+          <form method="POST">
+            <input type="hidden" name="action" value="probe_all" />
+            <Button type="submit" size="sm" variant="outline">
+              <RefreshCw className="w-3.5 h-3.5 mr-1" />
+              批量测活
+            </Button>
+          </form>
+        )}
+      </CardHeader>
+      <CardContent class="space-y-3">
+        {accounts.length === 0 ? (
+          <p class="text-sm text-muted-foreground">暂无 OAuth 账号</p>
+        ) : (
+          accounts.map((account) => {
+            const shareUrl = `${origin}/?oauth_key=${encodeURIComponent(account.shareToken)}`
+            const statusVariant =
+              account.status === "active"
+                ? "default"
+                : account.status === "auth_error"
+                  ? "destructive"
+                  : "secondary"
+            return (
+              <div class="border rounded-lg p-4 space-y-3">
+                <div class="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <div class="flex items-center gap-2">
+                      <Mail className="w-4 h-4 text-muted-foreground" />
+                      <span class="font-medium">{account.email}</span>
+                      <Badge variant={statusVariant}>{account.status}</Badge>
+                    </div>
+                    {account.note && (
+                      <p class="text-xs text-muted-foreground mt-1">{account.note}</p>
+                    )}
+                    {account.lastError && (
+                      <p class="text-xs text-destructive mt-1">错误: {account.lastError}</p>
+                    )}
+                    <p class="text-xs text-muted-foreground mt-1">
+                      创建 {formatDate(account.createdAt)}
+                      {account.lastSyncAt ? ` · 最近同步 ${formatDate(account.lastSyncAt)}` : ""}
+                    </p>
+                  </div>
+                  <div class="flex flex-wrap gap-2">
+                    <form method="POST">
+                      <input type="hidden" name="action" value="probe" />
+                      <input type="hidden" name="id" value={account.id} />
+                      <Button type="submit" size="sm" variant="outline" title="测活 Graph 凭证">
+                        测活
+                      </Button>
+                    </form>
+                    <form method="POST">
+                      <input type="hidden" name="action" value="regenerate" />
+                      <input type="hidden" name="id" value={account.id} />
+                      <Button type="submit" size="sm" variant="outline" title="轮换分享令牌">
+                        <RefreshCw className="w-3.5 h-3.5 mr-1" />
+                        轮换令牌
+                      </Button>
+                    </form>
+                    <form method="POST">
+                      <input type="hidden" name="action" value="toggle_status" />
+                      <input type="hidden" name="id" value={account.id} />
+                      <input
+                        type="hidden"
+                        name="status"
+                        value={account.status === "disabled" ? "active" : "disabled"}
+                      />
+                      <Button type="submit" size="sm" variant="outline">
+                        {account.status === "disabled" ? "启用" : "停用"}
+                      </Button>
+                    </form>
+                    <form method="POST" onsubmit="return confirm('确定删除此 OAuth 账号？')">
+                      <input type="hidden" name="action" value="delete" />
+                      <input type="hidden" name="id" value={account.id} />
+                      <Button type="submit" size="sm" variant="destructive">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    </form>
+                  </div>
+                </div>
+
+                <div class="bg-muted/40 rounded-md p-3 space-y-2 text-sm">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <KeyRound className="w-3.5 h-3.5 text-muted-foreground" />
+                    <span class="text-muted-foreground">分享令牌</span>
+                    <code class="text-xs break-all" data-token={account.shareToken}>
+                      {account.shareToken}
+                    </code>
+                    <button
+                      type="button"
+                      class="inline-flex items-center text-xs text-primary hover:underline cursor-pointer bg-transparent border-0 p-0"
+                      data-copy={account.shareToken}
+                    >
+                      <Copy className="w-3 h-3 mr-0.5" />
+                      复制
+                    </button>
+                  </div>
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <span class="text-muted-foreground">访问链接</span>
+                    <code class="text-xs break-all">{shareUrl}</code>
+                    <button
+                      type="button"
+                      class="inline-flex items-center text-xs text-primary hover:underline cursor-pointer bg-transparent border-0 p-0"
+                      data-copy={shareUrl}
+                    >
+                      <Copy className="w-3 h-3 mr-0.5" />
+                      复制链接
+                    </button>
+                    <a
+                      href={shareUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="text-xs text-primary hover:underline"
+                    >
+                      打开
+                    </a>
+                  </div>
+                </div>
+              </div>
+            )
+          })
+        )}
+      </CardContent>
+    </Card>
+  </div>
+
+  <script>
+    document.querySelectorAll<HTMLElement>("[data-copy]").forEach((el) => {
+      el.addEventListener("click", async () => {
+        const value = el.getAttribute("data-copy") || ""
+        try {
+          await navigator.clipboard.writeText(value)
+          const prev = el.textContent
+          el.textContent = "已复制"
+          setTimeout(() => {
+            el.textContent = prev
+          }, 1200)
+        } catch {
+          // ignore
+        }
+      })
+    })
+  </script>
+</AdminLayout>

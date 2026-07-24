@@ -28,22 +28,22 @@ const currentPath = Astro.url.pathname
     </div>
     <div class="flex h-screen overflow-hidden bg-transparent">
       <!-- 桌面端悬浮布局 -->
-      <div class="hidden md:flex flex-1 overflow-hidden p-6 gap-6 relative z-10">
+      <div class="hidden md:flex flex-1 min-w-0 overflow-hidden p-6 gap-6 relative z-10">
         <div class="h-full rounded-[24px] overflow-hidden glass-panel flex-shrink-0 animate-fade-in-up z-20" style="animation-duration: 0.8s;">
           <AdminSidebar currentPath={currentPath} client:load />
         </div>
-        <main class="flex-1 h-full overflow-y-auto rounded-[24px] glass-panel relative animate-fade-in-up z-10" style="animation-duration: 0.8s; animation-delay: 0.1s; animation-fill-mode: both;">
-          <div class="container py-8 px-8 max-w-7xl mx-auto h-full">
+        <main class="flex-1 min-w-0 h-full overflow-y-auto overflow-x-hidden rounded-[24px] glass-panel relative animate-fade-in-up z-10" style="animation-duration: 0.8s; animation-delay: 0.1s; animation-fill-mode: both;">
+          <div class="container py-8 px-6 lg:px-8 max-w-7xl mx-auto min-w-0">
             <slot />
           </div>
         </main>
       </div>
 
       <!-- 移动端弹性布局 -->
-      <div class="md:hidden flex flex-col flex-1 h-screen relative z-10">
+      <div class="md:hidden flex flex-col flex-1 min-w-0 h-screen relative z-10">
         <AdminSidebar currentPath={currentPath} client:load />
-        <main class="flex-1 overflow-y-auto pt-14">
-          <div class="container py-4 px-4 mx-auto animate-fade-in-up">
+        <main class="flex-1 min-w-0 overflow-y-auto overflow-x-hidden pt-14">
+          <div class="container py-4 px-4 mx-auto min-w-0 animate-fade-in-up">
             <slot />
           </div>
         </main>

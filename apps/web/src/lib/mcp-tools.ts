@@ -890,5 +890,151 @@ export const MCP_TOOLS: MCPTool[] = [
       },
       required: ["mailboxes"]
     }
+  },
+
+  // ========== OAuth 邮箱（Microsoft Graph） ==========
+  {
+    name: "import_oauth_accounts",
+    description: "批量导入 Outlook/Hotmail OAuth 账号。每行格式: email----password----client_id----refresh_token 或 email----client_id----refresh_token。已存在邮箱会更新凭证并保留分享令牌。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        text: {
+          type: "string",
+          description: "多行导入文本，每行一个账号"
+        },
+        note: {
+          type: "string",
+          description: "备注（应用到本次导入的全部账号）"
+        }
+      },
+      required: ["text"]
+    }
+  },
+  {
+    name: "list_oauth_accounts",
+    description: "列出所有 OAuth 收信账号（不含 refresh_token）。返回 email、status、share_token、note 等。",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      required: []
+    }
+  },
+  {
+    name: "get_oauth_verification_code",
+    description: "从 OAuth Outlook 账号实时拉取邮件并提取验证码（Microsoft Graph，不落库）。可用 email 或 share_token 定位账号。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        email: {
+          type: "string",
+          description: "OAuth 账号邮箱地址"
+        },
+        share_token: {
+          type: "string",
+          description: "分享令牌 xmail_oauth_..."
+        },
+        account_id: {
+          type: "string",
+          description: "账号 ID"
+        },
+        seconds: {
+          type: "number",
+          description: "查询最近 N 秒内的邮件，默认 600",
+          default: 600,
+          minimum: 0,
+          maximum: 86400
+        },
+        folder: {
+          type: "string",
+          description: "文件夹: inbox、junkemail 或 all（收件箱+垃圾箱），默认 all",
+          default: "all"
+        }
+      },
+      required: []
+    }
+  },
+  {
+    name: "list_oauth_emails",
+    description: "实时列出 OAuth 账号邮件（Microsoft Graph）。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        email: {
+          type: "string",
+          description: "OAuth 账号邮箱地址"
+        },
+        share_token: {
+          type: "string",
+          description: "分享令牌"
+        },
+        account_id: {
+          type: "string",
+          description: "账号 ID"
+        },
+        folder: {
+          type: "string",
+          description: "inbox | junkemail",
+          default: "inbox"
+        },
+        top: {
+          type: "number",
+          description: "返回数量，默认 20，最大 50",
+          default: 20,
+          minimum: 1,
+          maximum: 50
+        }
+      },
+      required: []
+    }
+  },
+  {
+    name: "delete_oauth_account",
+    description: "删除 OAuth 收信账号。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: {
+          type: "string",
+          description: "账号 ID"
+        },
+        email: {
+          type: "string",
+          description: "邮箱地址（与 id 二选一）"
+        }
+      },
+      required: []
+    }
+  },
+  {
+    name: "regenerate_oauth_share_token",
+    description: "轮换 OAuth 账号的分享令牌，旧令牌立即失效。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: {
+          type: "string",
+          description: "账号 ID"
+        },
+        email: {
+          type: "string",
+          description: "邮箱地址（与 id 二选一）"
+        }
+      },
+      required: []
+    }
+  },
+  {
+    name: "probe_oauth_account",
+    description: "测活 OAuth 账号 Graph 凭证。可传 email/id，或 all=true 批量测活。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "账号 ID" },
+        email: { type: "string", description: "邮箱地址" },
+        all: { type: "boolean", description: "是否测活全部账号", default: false }
+      },
+      required: []
+    }
   }
 ]

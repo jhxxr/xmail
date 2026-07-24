@@ -1,0 +1,369 @@
+---
+import Layout from "../layouts/Layout.astro"
+import {
+  createDB,
+  getOauthMailAccount,
+  getOauthMailAccountByShareToken,
+} from "database"
+import { verifyToken, generateOauthAccountToken } from "../lib/auth"
+import { isEncryptionKeyConfigured } from "../lib/crypto"
+import { extractVerificationCode, formatDate, extractPreview } from "../lib/utils"
+import { listMessages, getMessage, listAttachments, withAccountToken } from "../lib/ms-graph"
+import { sanitizeEmailHtml } from "../lib/email-html"
+import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
+import { Button } from "../components/ui/button"
+import { Badge } from "../components/ui/badge"
+import { Mail, RefreshCw, LogOut, Inbox, AlertTriangle } from "lucide-react"
+
+const db = createDB(Astro.locals.runtime.env.DB)
+const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
+const encryptionKey = Astro.locals.runtime.env.ENCRYPTION_KEY
+
+let accountId: string | null = Astro.url.searchParams.get("account")
+const folder = Astro.url.searchParams.get("folder") || "inbox"
+const messageId = Astro.url.searchParams.get("message")
+let error = ""
+let authError = false
+
+// Accept oauth_key on this page too
+const oauthKey = Astro.url.searchParams.get("oauth_key")
+if (oauthKey) {
+  const byToken = await getOauthMailAccountByShareToken(db, oauthKey)
+  if (byToken && byToken.status !== "disabled") {
+    const session = await generateOauthAccountToken(byToken.id, jwtSecret)
+    Astro.cookies.set("oauth_token", session, {
+      httpOnly: true,
+      secure: import.meta.env.PROD,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 30,
+    })
+    return Astro.redirect(`/oauth-inbox?account=${encodeURIComponent(byToken.id)}`)
+  }
+  error = "无效的访问令牌"
+}
+
+// Logout
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData()
+  if (form.get("action") === "logout") {
+    Astro.cookies.delete("oauth_token", { path: "/" })
+    return Astro.redirect("/")
+  }
+}
+
+const sessionToken = Astro.cookies.get("oauth_token")?.value
+let sessionAccountId: string | null = null
+if (sessionToken) {
+  const payload = await verifyToken(sessionToken, jwtSecret)
+  if (payload?.type === "oauth_account") {
+    sessionAccountId = payload.id
+  }
+}
+
+// Admin can also open with admin cookie + account id
+const adminToken = Astro.cookies.get("admin_token")?.value
+let isAdmin = false
+if (adminToken) {
+  const adminPayload = await verifyToken(adminToken, jwtSecret)
+  isAdmin = adminPayload?.type === "admin"
+}
+
+if (!sessionAccountId && !isAdmin) {
+  return Astro.redirect("/")
+}
+
+if (!accountId) {
+  accountId = sessionAccountId
+}
+
+if (!accountId) {
+  return Astro.redirect("/")
+}
+
+// Non-admin must match session account
+if (!isAdmin && sessionAccountId && accountId !== sessionAccountId) {
+  return Astro.redirect(`/oauth-inbox?account=${encodeURIComponent(sessionAccountId)}`)
+}
+
+const account = await getOauthMailAccount(db, accountId)
+if (!account) {
+  Astro.cookies.delete("oauth_token", { path: "/" })
+  return Astro.redirect("/")
+}
+
+if (account.status === "disabled") {
+  error = "该账号已停用"
+}
+
+type ListItem = {
+  id: string
+  subject: string | null
+  fromAddress: string
+  fromName: string | null
+  receivedAt: string | null
+  bodyPreview: string | null
+  isRead: boolean
+  hasAttachments: boolean
+  folder?: string
+}
+
+type DetailItem = ListItem & {
+  text: string | null
+  html: string | null
+  code: string | null
+  toAddresses: string[]
+  ccAddresses: string[]
+  attachments: Array<{
+    id: string
+    name: string
+    contentType: string
+    size: number
+    isInline: boolean
+  }>
+}
+
+let emails: ListItem[] = []
+let detail: DetailItem | null = null
+
+if (!error && isEncryptionKeyConfigured(encryptionKey) && account.status !== "disabled") {
+  if (messageId) {
+    const result = await withAccountToken(db, account, encryptionKey!, async (accessToken) => {
+      const msg = await getMessage(accessToken, messageId, { preferHtml: true })
+      if (!msg.success) throw new Error(msg.error)
+      let attachments: DetailItem["attachments"] = []
+      if (msg.email.hasAttachments) {
+        const listed = await listAttachments(accessToken, messageId)
+        if (listed.success) {
+          attachments = listed.attachments.map((a) => ({
+            id: a.id,
+            name: a.name,
+            contentType: a.contentType,
+            size: a.size,
+            isInline: a.isInline,
+          }))
+        }
+      }
+      return { email: msg.email, attachments }
+    })
+    if (result.success) {
+      const code =
+        extractVerificationCode(result.data.email.text, result.data.email.html) ||
+        extractVerificationCode(result.data.email.subject, null)
+      detail = {
+        ...result.data.email,
+        html: result.data.email.html ? sanitizeEmailHtml(result.data.email.html) : null,
+        code,
+        attachments: result.data.attachments,
+      }
+    } else {
+      error = result.error
+      authError = Boolean(result.authError)
+    }
+  } else {
+    const result = await withAccountToken(db, account, encryptionKey!, async (accessToken) => {
+      const listed = await listMessages(accessToken, { folder, top: 30, skip: 0 })
+      if (!listed.success) throw new Error(listed.error)
+      return listed.emails
+    })
+    if (result.success) {
+      emails = result.data
+    } else {
+      error = result.error
+      authError = Boolean(result.authError)
+    }
+  }
+} else if (!isEncryptionKeyConfigured(encryptionKey)) {
+  error = "服务器未配置 ENCRYPTION_KEY"
+}
+
+function formatGraphDate(iso: string | null): string {
+  if (!iso) return ""
+  const ms = Date.parse(iso)
+  if (Number.isNaN(ms)) return iso
+  return formatDate(Math.floor(ms / 1000))
+}
+---
+
+<Layout title={`OAuth 收件箱 - ${account.email}`}>
+  <div class="min-h-screen bg-muted/30">
+    <header class="bg-background border-b sticky top-0 z-10">
+      <div class="container max-w-3xl mx-auto px-4 h-16 flex items-center gap-3">
+        <div class="flex-1 min-w-0">
+          <h1 class="font-bold text-lg truncate">{account.email}</h1>
+          <p class="text-xs text-muted-foreground">Microsoft Graph · 实时拉取（不落库）</p>
+        </div>
+        <Badge variant={account.status === "active" ? "default" : "destructive"}>
+          {account.status}
+        </Badge>
+        <form method="POST">
+          <input type="hidden" name="action" value="logout" />
+          <Button type="submit" variant="ghost" size="sm">
+            <LogOut className="w-4 h-4" />
+          </Button>
+        </form>
+      </div>
+    </header>
+
+    <main class="container max-w-3xl mx-auto px-4 py-6 space-y-4">
+      {error && (
+        <div class="rounded-md border border-destructive/40 bg-destructive/10 text-destructive px-4 py-3 text-sm flex gap-2">
+          <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+          <div>
+            <p>{error}</p>
+            {authError && (
+              <p class="mt-1 text-xs">授权可能已失效，请联系管理员重新导入或授权。</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {!messageId && (
+        <div class="flex gap-2 flex-wrap">
+          <a href={`/oauth-inbox?account=${account.id}&folder=all`}>
+            <Button variant={folder === "all" ? "default" : "outline"} size="sm">
+              全部
+            </Button>
+          </a>
+          <a href={`/oauth-inbox?account=${account.id}&folder=inbox`}>
+            <Button variant={folder === "inbox" ? "default" : "outline"} size="sm">
+              <Inbox className="w-3.5 h-3.5 mr-1" />
+              收件箱
+            </Button>
+          </a>
+          <a href={`/oauth-inbox?account=${account.id}&folder=junkemail`}>
+            <Button variant={folder === "junkemail" ? "default" : "outline"} size="sm">
+              垃圾邮件
+            </Button>
+          </a>
+          <a href={`/oauth-inbox?account=${account.id}&folder=${folder}`}>
+            <Button variant="outline" size="sm">
+              <RefreshCw className="w-3.5 h-3.5 mr-1" />
+              刷新
+            </Button>
+          </a>
+        </div>
+      )}
+
+      {detail ? (
+        <Card>
+          <CardHeader class="space-y-2">
+            <a
+              href={`/oauth-inbox?account=${account.id}&folder=${folder}`}
+              class="text-sm text-primary hover:underline"
+            >
+              ← 返回列表
+            </a>
+            <CardTitle className="text-lg">{detail.subject || "(无主题)"}</CardTitle>
+            <div class="text-sm text-muted-foreground">
+              {detail.fromName || detail.fromAddress}
+              {detail.fromName ? ` <${detail.fromAddress}>` : ""}
+              · {formatGraphDate(detail.receivedAt)}
+            </div>
+            {detail.code && (
+              <div class="rounded-md bg-primary/10 border border-primary/20 px-3 py-2 text-sm">
+                验证码：
+                <span class="font-mono font-bold text-lg tracking-wider ml-1">{detail.code}</span>
+              </div>
+            )}
+            {detail.attachments.length > 0 && (
+              <div class="text-sm space-y-1">
+                <p class="font-medium">附件（{detail.attachments.length}）</p>
+                <ul class="space-y-1">
+                  {detail.attachments.map((att) => (
+                    <li>
+                      <a
+                        class="text-primary hover:underline text-xs"
+                        href={`/api/v1/oauth/emails/${encodeURIComponent(messageId!)}/attachments/${encodeURIComponent(att.id)}`}
+                      >
+                        {att.name}
+                        <span class="text-muted-foreground ml-1">
+                          ({Math.max(1, Math.round(att.size / 1024))} KB)
+                        </span>
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <a
+              class="text-xs text-muted-foreground hover:underline"
+              href={`/api/v1/oauth/emails/${encodeURIComponent(messageId!)}/raw`}
+            >
+              下载原始 .eml
+            </a>
+          </CardHeader>
+          <CardContent>
+            {detail.html ? (
+              <div class="prose prose-sm max-w-none dark:prose-invert" set:html={detail.html} />
+            ) : (
+              <pre class="whitespace-pre-wrap text-sm font-sans">{detail.text || detail.bodyPreview || "(无内容)"}</pre>
+            )}
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Mail className="w-4 h-4" />
+              邮件列表
+            </CardTitle>
+          </CardHeader>
+          <CardContent class="p-0">
+            {emails.length === 0 && !error ? (
+              <p class="px-4 py-8 text-center text-sm text-muted-foreground">暂无邮件</p>
+            ) : (
+              <ul class="divide-y">
+                {emails.map((email) => {
+                  const previewCode =
+                    extractVerificationCode(email.bodyPreview, null) ||
+                    extractVerificationCode(email.subject, null)
+                  return (
+                    <li>
+                      <a
+                        href={`/oauth-inbox?account=${account.id}&folder=${folder}&message=${encodeURIComponent(email.id)}`}
+                        class="block px-4 py-3 hover:bg-muted/50 transition-colors"
+                      >
+                        <div class="flex items-start justify-between gap-2">
+                          <div class="min-w-0 flex-1">
+                            <div class="flex items-center gap-2">
+                              <span class={`text-sm truncate ${email.isRead ? "font-normal" : "font-semibold"}`}>
+                                {email.subject || "(无主题)"}
+                              </span>
+                              {previewCode && (
+                                <Badge variant="secondary" className="font-mono shrink-0">
+                                  {previewCode}
+                                </Badge>
+                              )}
+                              {email.hasAttachments && (
+                                <Badge variant="outline" className="shrink-0">附件</Badge>
+                              )}
+                              {folder === "all" && email.folder && (
+                                <Badge variant="outline" className="shrink-0 text-[10px]">
+                                  {email.folder === "junkemail" ? "垃圾" : "收件"}
+                                </Badge>
+                              )}
+                            </div>
+                            <p class="text-xs text-muted-foreground mt-0.5 truncate">
+                              {email.fromName || email.fromAddress}
+                            </p>
+                            <p class="text-xs text-muted-foreground mt-1 line-clamp-2">
+                              {extractPreview(email.bodyPreview, null)}
+                            </p>
+                          </div>
+                          <span class="text-xs text-muted-foreground shrink-0">
+                            {formatGraphDate(email.receivedAt)}
+                          </span>
+                        </div>
+                      </a>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+      )}
+    </main>
+  </div>
+</Layout>

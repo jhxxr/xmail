@@ -6,7 +6,7 @@
 [![Astro](https://img.shields.io/badge/Astro-5-BC52EE?logo=astro&logoColor=white)](https://github.com/jhxxr/xmail)
 [![React](https://img.shields.io/badge/React-19-149ECA?logo=react&logoColor=white)](https://github.com/jhxxr/xmail)
 [![pnpm](https://img.shields.io/badge/pnpm-10+-F69220?logo=pnpm&logoColor=white)](https://github.com/jhxxr/xmail)
-[![MCP](https://img.shields.io/badge/MCP-47_tools-5865F2)](MCP.md)
+[![MCP](https://img.shields.io/badge/MCP-54_tools-5865F2)](MCP.md)
 
 ## 功能
 
@@ -16,8 +16,12 @@
 - **验证码提取**：从不同语言和格式的邮件中识别 4～8 位数字或字母数字验证码。
 - **管理员仪表盘**：展示用户、邮箱、邮件、分配状态等统计信息，并提供邮件与操作日志清理能力。
 - **2FA 管理**：导入、生成、分配和使用 TOTP；支持二维码扫描与手动输入密钥。
-- **第三方账号**：管理外部邮箱服务商、账号和关联服务，并按用户授权访问。
-- **API 与 MCP**：使用独立 API Key 调用 REST API，或通过 MCP 的 47 个工具完成批量自动化。
+- **第三方账号**：管理外部邮箱服务商、账号和关联服务，并按用户授权访问（凭证库，不拉信）。
+- **OAuth 邮箱**：导入 Outlook/Hotmail 等微软 OAuth 账号，经 Microsoft Graph 按需收信；每个账号有可分享的长期令牌（`/?oauth_key=`）。
+- **临时工作台**：管理员单页创建随机邮箱、复制凭据、实时收信取码；支持「下次自动删除」或「下次带服务创建」。
+- **API 与 MCP**：使用独立 API Key 调用 REST / MCP（54+ 工具）。
+- **CF Temp Email 兼容 API**：兼容 `cloudflare_temp_email` 的路径与响应形状（`/admin/new_address`、`/api/mails`、`/api/parsed_mails`、`/api/otp` 等），便于接入已有外部工具。
+- **读信性能**：邮件列表只查摘要列、count 仅首页计算、验证码先扫 subject 再按需拉正文。
 - **审计能力**：关键管理操作写入日志，可按时间范围清理。
 
 ## 技术架构
@@ -35,8 +39,8 @@ apps/email-worker ──────► Cloudflare D1
                                │
                         apps/web (Pages)
                          ├─ 用户收件箱
-                         ├─ 管理员后台
-                         ├─ REST API
+                         ├─ 管理员后台 / 临时工作台
+                         ├─ REST API（含 CF 兼容层）
                          └─ MCP endpoint
 ```
 
@@ -115,7 +119,9 @@ Web 应用需要以下 Secrets：
 | --- | --- | --- |
 | `JWT_SECRET` | 是 | 管理员和用户会话的 JWT 签名密钥，建议使用至少 32 字节随机值 |
 | `ADMIN_PASSWORD` | 是 | 创建首个管理员时使用的初始密码 |
-| `ENCRYPTION_KEY` | 使用第三方账号时 | 加密第三方账号密码；生产环境不要使用代码中的默认回退值 |
+| `ENCRYPTION_KEY` | 使用第三方账号 / OAuth 邮箱时 | AES 加密 OAuth refresh_token 与第三方密码；生产环境必须设置，不要使用默认回退值 |
+| `MS_CLIENT_ID` | 使用网页微软授权导入时 | Azure 应用（公共客户端）Client ID |
+| `MS_REDIRECT_URI` | 可选 | 默认 `{站点}/api/oauth/microsoft/callback`，须与 Azure 重定向 URI 一致 |
 
 可以在 Cloudflare Dashboard 的 Pages 项目设置中添加，也可以在 Pages 项目创建后执行：
 
@@ -124,7 +130,16 @@ cd apps/web
 pnpm exec wrangler pages secret put JWT_SECRET --project-name xmail
 pnpm exec wrangler pages secret put ADMIN_PASSWORD --project-name xmail
 pnpm exec wrangler pages secret put ENCRYPTION_KEY --project-name xmail
+# 可选：网页微软授权导入
+# pnpm exec wrangler pages secret put MS_CLIENT_ID --project-name xmail
+# pnpm exec wrangler pages secret put MS_REDIRECT_URI --project-name xmail
 cd ../..
+```
+
+OAuth 邮箱表迁移（首次启用时）：
+
+```bash
+pnpm --filter web exec wrangler d1 execute xmail-db --remote --file=../../packages/database/migrations/0002_oauth_mail_accounts.sql
 ```
 
 生成随机密钥的示例：
@@ -224,6 +239,7 @@ pnpm --filter email-worker dev
 - 全局邮件查看、搜索和清理
 - 操作日志查看与按范围清理
 - API Key 创建、撤销和删除
+- 临时工作台（随机邮箱 + 实时收信取码）
 - 邮箱域名与邮件保留策略设置
 
 邮件保留天数只定义清理范围；当前版本需要在「系统设置」中手动触发清理，或通过 MCP/API 自动化调用清理工具。
@@ -239,16 +255,38 @@ pnpm --filter email-worker dev
 
 ## API 与 MCP
 
-### REST API
+### REST API（XMail 原生）
 
-在 `/admin/api-keys` 创建 API Key 后，可以获取指定邮箱最近邮件中的验证码：
+在 `/admin/api-keys` 创建 API Key 后：
 
 ```bash
-curl "https://your-domain/api/v1/admin/verification-code?mailbox=test@example.com&seconds=600" \
-  -H "Authorization: Bearer sk_live_xxx"
+# 验证码
+curl "https://your-domain/api/v1/admin/verification-code?mailbox=test@example.com&seconds=600"   -H "Authorization: Bearer sk_live_xxx"
+
+# 创建邮箱
+curl -X POST "https://your-domain/api/v1/admin/mailbox/create"   -H "Authorization: Bearer sk_live_xxx"   -H "Content-Type: application/json"   -d '{"local_part":"user","domain":"example.com"}'
 ```
 
-API Key 只在创建时显示完整值，请立即保存。接口参数和返回结构见 [API.md](API.md)。
+API Key 只在创建时显示完整值，请立即保存。
+
+### CF Temp Email 兼容 API
+
+若已有基于 [cloudflare_temp_email](https://github.com/dreamhunter2333/cloudflare_temp_email) 的脚本/客户端，可将 Worker 地址改为 XMail 域名：
+
+```bash
+# 创建邮箱（返回 jwt / address / password）
+curl -X POST "https://your-domain/admin/new_address"   -H "x-admin-auth: $ADMIN_PASSWORD_OR_SK_LIVE"   -H "Content-Type: application/json"   -d '{"name":"test01","domain":"example.com"}'
+
+# 列邮件（Address JWT）
+curl "https://your-domain/api/mails?limit=20&offset=0"   -H "Authorization: Bearer $JWT"
+
+# 验证码
+curl "https://your-domain/api/otp?seconds=600"   -H "Authorization: Bearer $JWT"
+```
+
+主要兼容路径：`/admin/new_address`、`/api/new_address`、`/api/mails`、`/api/mail/:id`、`/api/parsed_mails`、`/api/parsed_mail/:id`、`/api/otp`、`/api/settings`、`/api/clear_inbox`、`/admin/mails`。
+
+完整字段、迁移差异与读信性能见 [API.md](API.md)。
 
 ### MCP
 
@@ -264,7 +302,8 @@ https://your-domain/api/mcp
 cp .mcp.json.example .mcp.json
 ```
 
-当前源码提供 47 个 MCP 工具，覆盖验证码、用户、邮箱、共享邮箱、邮件搜索、清理、统计、日志和服务绑定等操作。完整配置与示例见 [MCP.md](MCP.md)。
+当前源码提供 54+ 个 MCP 工具，覆盖验证码、用户、邮箱、OAuth、共享邮箱、邮件搜索、清理、统计、日志和服务绑定等操作。完整配置与示例见 [MCP.md](MCP.md)。
+
 
 ## 数据模型
 

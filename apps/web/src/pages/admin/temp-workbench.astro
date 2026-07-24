@@ -1,0 +1,949 @@
+---
+import AdminLayout from "../../layouts/AdminLayout.astro"
+import {
+  createDB,
+  getAdminById,
+  getMailDomain,
+  getMailDomains,
+  listServiceTemplates,
+} from "database"
+import { verifyToken } from "../../lib/auth"
+
+const db = createDB(Astro.locals.runtime.env.DB)
+const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
+const envMailDomain = (Astro.locals.runtime.env.MAIL_DOMAIN || "").trim()
+const token = Astro.cookies.get("admin_token")?.value
+if (!token) return Astro.redirect("/admin/login")
+const payload = await verifyToken(token, jwtSecret)
+if (!payload || payload.type !== "admin") return Astro.redirect("/admin/login")
+const admin = await getAdminById(db, payload.id)
+if (!admin) return Astro.redirect("/admin/login")
+
+let defaultDomain = ""
+let domains: string[] = []
+let ssrTemplates: Array<{ id: string; name: string; loginUrl: string; note: string | null }> = []
+let bootstrapError = ""
+try {
+  const [dd, ds, ts] = await Promise.all([
+    getMailDomain(db),
+    getMailDomains(db),
+    listServiceTemplates(db),
+  ])
+  defaultDomain = dd
+  domains = ds.length ? ds : dd ? [dd] : []
+  if ((!domains.length || domains.every((d) => d === "example.com")) && envMailDomain) {
+    domains = [envMailDomain, ...domains.filter((d) => d !== "example.com" && d !== envMailDomain)]
+    if (!defaultDomain || defaultDomain === "example.com") defaultDomain = envMailDomain
+  }
+  ssrTemplates = ts.map((t) => ({
+    id: t.id,
+    name: t.name,
+    loginUrl: t.loginUrl,
+    note: t.note,
+  }))
+} catch (e) {
+  bootstrapError = e instanceof Error ? e.message : "加载域名失败"
+  if (envMailDomain) {
+    defaultDomain = envMailDomain
+    domains = [envMailDomain]
+  }
+}
+
+const bootstrapJson = JSON.stringify({
+  defaultDomain,
+  domains,
+  templates: ssrTemplates,
+  error: bootstrapError || null,
+})
+---
+
+<AdminLayout title="临时邮箱工作台">
+  <!--
+    AdminLayout renders <slot /> twice (desktop + mobile).
+    Use data-wb-* attributes and document-level event delegation so both clones work.
+  -->
+  <div
+    class="space-y-4 temp-workbench-root"
+    data-wb-root
+    data-api="/api/admin/temp-workbench"
+    data-bootstrap={bootstrapJson}
+  >
+    <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
+      <div>
+        <h1 class="text-2xl font-bold tracking-tight">临时邮箱工作台</h1>
+        <p class="text-sm text-muted-foreground mt-1">
+          一页完成：选后缀 → 随机创建 → 复制邮箱/密码 → 刷新收信。用完后选择「下次自动删除」或「下次带服务创建」（互斥）。
+        </p>
+      </div>
+    </div>
+
+    {bootstrapError && (
+      <div class="rounded-md px-4 py-3 text-sm border border-amber-500/40 bg-amber-500/10 text-amber-900 dark:text-amber-100">
+        域名加载警告：{bootstrapError}
+        {domains.length ? "（已使用备用域名）" : "（请到「系统设置」添加邮箱域名）"}
+      </div>
+    )}
+
+    <div data-wb-alert class="hidden rounded-md px-4 py-3 text-sm border"></div>
+
+    <div class="rounded-xl border bg-card p-4 space-y-4">
+      <div class="flex flex-col lg:flex-row gap-3 lg:items-end">
+        <div class="flex-1 min-w-[200px]">
+          <label class="text-xs font-medium text-muted-foreground">邮箱后缀</label>
+          <select data-wb-domain class="mt-1 w-full h-10 rounded-md border border-input bg-background px-3 text-sm">
+            {domains.length === 0 ? (
+              <option value="">无可用域名（请到系统设置配置）</option>
+            ) : (
+              domains.map((d) => (
+                <option value={d} selected={d === defaultDomain}>{d}</option>
+              ))
+            )}
+          </select>
+        </div>
+        <div class="min-w-[160px]">
+          <label class="text-xs font-medium text-muted-foreground">创建后自动复制</label>
+          <select data-wb-auto-copy class="mt-1 w-full h-10 rounded-md border border-input bg-background px-3 text-sm">
+            <option value="email" selected>仅邮箱</option>
+            <option value="both">邮箱---密码</option>
+            <option value="password">仅密码</option>
+            <option value="none">不自动复制</option>
+          </select>
+        </div>
+        <button
+          type="button"
+          data-wb-create
+          class="inline-flex items-center justify-center h-10 px-5 rounded-full bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+          title="快捷键 Ctrl/⌘ + Enter"
+          disabled={domains.length === 0}
+        >
+          随机创建
+        </button>
+      </div>
+
+      <div class="rounded-lg border bg-muted/30 p-3 space-y-3">
+        <p class="text-xs font-medium text-muted-foreground">
+          当前邮箱用完后的处理（创建下一个时生效，二选一）
+        </p>
+        <div class="grid gap-2 sm:grid-cols-2">
+          <label class="flex items-start gap-2 rounded-md border bg-background p-3 cursor-pointer hover:border-primary/50 has-[:checked]:border-primary has-[:checked]:bg-primary/5">
+            <input type="radio" data-wb-next-mode value="auto_delete" class="mt-1" checked />
+            <span>
+              <span class="text-sm font-medium block">自动删除</span>
+              <span class="text-xs text-muted-foreground">创建下一个时，删除当前临时邮箱</span>
+            </span>
+          </label>
+          <label class="flex items-start gap-2 rounded-md border bg-background p-3 cursor-pointer hover:border-primary/50 has-[:checked]:border-primary has-[:checked]:bg-primary/5">
+            <input type="radio" data-wb-next-mode value="keep_with_services" class="mt-1" />
+            <span>
+              <span class="text-sm font-medium block">关联服务并保留</span>
+              <span class="text-xs text-muted-foreground">创建下一个时不删当前邮箱，且给新邮箱绑定所选服务</span>
+            </span>
+          </label>
+        </div>
+        <label class="inline-flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+          <input type="radio" data-wb-next-mode value="none" />
+          无特殊处理（仅创建新邮箱）
+        </label>
+
+        <div data-wb-service-panel class="hidden space-y-3 border-t pt-3">
+          <div>
+            <p class="text-xs font-medium mb-2">选择已有服务模板</p>
+            <div data-wb-templates class="flex flex-wrap gap-2 text-sm"></div>
+          </div>
+          <div class="grid sm:grid-cols-3 gap-2">
+            <input data-wb-custom-name placeholder="新服务名称" class="h-9 rounded-md border border-input bg-background px-3 text-sm" />
+            <input data-wb-custom-url placeholder="登录 URL" class="h-9 rounded-md border border-input bg-background px-3 text-sm sm:col-span-2" />
+          </div>
+          <div class="flex flex-wrap items-center gap-3">
+            <label class="inline-flex items-center gap-2 text-xs cursor-pointer">
+              <input type="checkbox" data-wb-save-template />
+              同时保存为全局服务模板
+            </label>
+            <button type="button" data-wb-add-custom class="text-xs h-8 px-3 rounded-full border hover:bg-accent">
+              添加到本次绑定
+            </button>
+          </div>
+          <div data-wb-custom-list class="flex flex-wrap gap-2 text-xs"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid lg:grid-cols-5 gap-4">
+      <div class="lg:col-span-2 space-y-3">
+        <div class="rounded-xl border bg-card p-4 space-y-3">
+          <div class="flex items-center justify-between">
+            <h2 class="font-semibold text-sm">当前临时邮箱</h2>
+            <span data-wb-status class="text-xs text-muted-foreground">尚未创建</span>
+          </div>
+          <div>
+            <label class="text-xs text-muted-foreground">邮箱</label>
+            <div class="mt-1 flex gap-2">
+              <input data-wb-email readonly class="flex-1 h-10 rounded-md border bg-muted/40 px-3 text-sm font-mono" value="" placeholder="—" />
+              <button type="button" data-wb-copy="email" class="h-10 px-3 rounded-md border text-xs hover:bg-accent">复制</button>
+            </div>
+          </div>
+          <div>
+            <label class="text-xs text-muted-foreground">密码</label>
+            <div class="mt-1 flex gap-2">
+              <input data-wb-password readonly class="flex-1 h-10 rounded-md border bg-muted/40 px-3 text-sm font-mono" value="" placeholder="—" />
+              <button type="button" data-wb-copy="password" class="h-10 px-3 rounded-md border text-xs hover:bg-accent">复制</button>
+            </div>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <button type="button" data-wb-copy="both" class="h-9 px-3 rounded-full border text-xs hover:bg-accent">复制邮箱---密码</button>
+            <button type="button" data-wb-refresh class="h-9 px-3 rounded-full border text-xs hover:bg-accent" disabled>刷新邮件</button>
+            <label class="inline-flex items-center gap-1.5 text-xs text-muted-foreground ml-auto">
+              <input type="checkbox" data-wb-auto-refresh />
+              自动刷新 (8s)
+            </label>
+          </div>
+          <div data-wb-bound class="text-xs text-muted-foreground"></div>
+        </div>
+      </div>
+
+      <div class="lg:col-span-3 rounded-xl border bg-card overflow-hidden flex flex-col min-h-[420px]">
+        <div class="px-4 py-3 border-b flex items-center justify-between">
+          <h2 class="font-semibold text-sm">最新邮件</h2>
+          <span data-wb-email-count class="text-xs text-muted-foreground">0</span>
+        </div>
+        <div data-wb-otp-bar class="hidden border-b bg-primary/10 px-4 py-3">
+          <div class="flex flex-wrap items-center gap-3">
+            <div class="min-w-0 flex-1">
+              <p class="text-xs text-muted-foreground">最新验证码</p>
+              <p data-wb-otp-code class="font-mono text-2xl sm:text-3xl font-bold tracking-[0.2em] text-primary select-all">——</p>
+              <p data-wb-otp-meta class="text-[11px] text-muted-foreground truncate mt-0.5"></p>
+            </div>
+            <button type="button" data-wb-otp-copy class="h-12 px-6 rounded-full bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 shadow-sm">
+              复制验证码
+            </button>
+          </div>
+        </div>
+        <div class="grid md:grid-cols-2 flex-1 min-h-0">
+          <div data-wb-email-list class="border-r overflow-y-auto max-h-[560px] divide-y">
+            <p class="p-6 text-sm text-muted-foreground text-center">创建邮箱后在此查看收件</p>
+          </div>
+          <div data-wb-email-detail class="overflow-y-auto max-h-[560px] p-4 text-sm text-muted-foreground">
+            选择左侧邮件查看详情
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</AdminLayout>
+
+<script>
+  /**
+   * AdminLayout renders slot twice (desktop + mobile).
+   * Use per-root state + document delegation so whichever clone is visible works.
+   */
+  type Template = { id: string; name: string; loginUrl: string; note: string | null }
+  type CustomService = { name: string; loginUrl: string; note?: string; saveAsTemplate?: boolean }
+  type Prefs = {
+    domain?: string
+    nextMode?: "auto_delete" | "keep_with_services" | "none"
+    autoCopy?: "email" | "both" | "password" | "none"
+    autoRefresh?: boolean
+    templateIds?: string[]
+  }
+  type RootState = {
+    root: HTMLElement
+    apiBase: string
+    templates: Template[]
+    selectedTemplateIds: Set<string>
+    customServices: CustomService[]
+    currentAddress: string
+    currentPassword: string
+    latestOtp: string
+    pollTimer: number | null
+    creating: boolean
+  }
+
+  const STORAGE_KEY = "xmail.tempWorkbench.v1"
+  const states = new WeakMap<HTMLElement, RootState>()
+
+  function q<T extends Element>(root: HTMLElement, sel: string): T | null {
+    return root.querySelector(sel) as T | null
+  }
+
+  function loadPrefs(): Prefs {
+    try {
+      return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}") as Prefs
+    } catch {
+      return {}
+    }
+  }
+
+  function savePrefs(patch: Prefs) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...loadPrefs(), ...patch }))
+    } catch {
+      // ignore
+    }
+  }
+
+  function escapeHtml(s: string) {
+    return String(s || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+  }
+
+  function showAlert(root: HTMLElement, text: string, type: "success" | "error" = "success") {
+    const box = q<HTMLElement>(root, "[data-wb-alert]")
+    if (!box) return
+    box.textContent = text
+    box.classList.remove("hidden")
+    box.className =
+      type === "error"
+        ? "rounded-md px-4 py-3 text-sm border border-destructive/50 bg-destructive/10 text-destructive"
+        : "rounded-md px-4 py-3 text-sm border border-primary/30 bg-primary/10 text-foreground"
+  }
+
+  function getNextMode(root: HTMLElement): "auto_delete" | "keep_with_services" | "none" {
+    const checked = root.querySelector("[data-wb-next-mode]:checked") as HTMLInputElement | null
+    const v = checked?.value
+    if (v === "auto_delete" || v === "keep_with_services") return v
+    return "none"
+  }
+
+  function setNextMode(root: HTMLElement, mode: string) {
+    root.querySelectorAll<HTMLInputElement>("[data-wb-next-mode]").forEach((input) => {
+      input.checked = input.value === mode
+    })
+    syncServicePanel(root)
+  }
+
+  function syncServicePanel(root: HTMLElement) {
+    const panel = q<HTMLElement>(root, "[data-wb-service-panel]")
+    if (!panel) return
+    panel.classList.toggle("hidden", getNextMode(root) !== "keep_with_services")
+  }
+
+  function persistUiState(root: HTMLElement, state: RootState) {
+    const domainEl = q<HTMLSelectElement>(root, "[data-wb-domain]")
+    const autoCopyEl = q<HTMLSelectElement>(root, "[data-wb-auto-copy]")
+    const autoRefreshEl = q<HTMLInputElement>(root, "[data-wb-auto-refresh]")
+    savePrefs({
+      domain: domainEl?.value || undefined,
+      nextMode: getNextMode(root),
+      autoCopy: (autoCopyEl?.value as Prefs["autoCopy"]) || "email",
+      autoRefresh: !!autoRefreshEl?.checked,
+      templateIds: [...state.selectedTemplateIds],
+    })
+  }
+
+  async function copyText(text: string): Promise<boolean> {
+    if (!text) return false
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch {
+      try {
+        const ta = document.createElement("textarea")
+        ta.value = text
+        ta.style.position = "fixed"
+        ta.style.left = "-9999px"
+        document.body.appendChild(ta)
+        ta.select()
+        const ok = document.execCommand("copy")
+        document.body.removeChild(ta)
+        return ok
+      } catch {
+        return false
+      }
+    }
+  }
+
+  function flashBtn(btn: HTMLElement, ok: boolean) {
+    const prev = btn.textContent
+    btn.textContent = ok ? "已复制" : "失败"
+    setTimeout(() => {
+      btn.textContent = prev
+    }, 1000)
+  }
+
+  async function api(path: string, init?: RequestInit) {
+    const res = await fetch(path, {
+      credentials: "same-origin",
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        ...(init?.headers || {}),
+      },
+    })
+    const data = await res.json().catch(() => ({} as any))
+    if (!res.ok || data.success === false) {
+      const err = new Error(data.error || `请求失败 (${res.status})`) as Error & { status?: number }
+      err.status = res.status
+      throw err
+    }
+    return data
+  }
+
+  function formatTs(ts: number) {
+    if (!ts) return ""
+    const d = new Date(ts * 1000)
+    const pad = (n: number) => String(n).padStart(2, "0")
+    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  }
+
+  function setOtpBar(root: HTMLElement, state: RootState, code: string | null, meta = "") {
+    const bar = q<HTMLElement>(root, "[data-wb-otp-bar]")
+    const codeEl = q<HTMLElement>(root, "[data-wb-otp-code]")
+    const metaEl = q<HTMLElement>(root, "[data-wb-otp-meta]")
+    if (!bar) return
+    if (!code) {
+      bar.classList.add("hidden")
+      state.latestOtp = ""
+      return
+    }
+    state.latestOtp = code
+    bar.classList.remove("hidden")
+    if (codeEl) codeEl.textContent = code
+    if (metaEl) metaEl.textContent = meta
+  }
+
+  function renderTemplates(root: HTMLElement, state: RootState) {
+    const box = q<HTMLElement>(root, "[data-wb-templates]")
+    if (!box) return
+    if (!state.templates.length) {
+      box.innerHTML = '<span class="text-xs text-muted-foreground">暂无服务模板，可下方新建</span>'
+      return
+    }
+    box.innerHTML = state.templates
+      .map((t) => {
+        const checked = state.selectedTemplateIds.has(t.id)
+        return `<label class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 cursor-pointer text-xs ${
+          checked ? "border-primary bg-primary/10" : "bg-background"
+        }">
+          <input type="checkbox" data-wb-template-id="${escapeHtml(t.id)}" ${checked ? "checked" : ""} />
+          <span>${escapeHtml(t.name)}</span>
+        </label>`
+      })
+      .join("")
+  }
+
+  function renderCustoms(root: HTMLElement, state: RootState) {
+    const box = q<HTMLElement>(root, "[data-wb-custom-list]")
+    if (!box) return
+    if (!state.customServices.length) {
+      box.innerHTML = ""
+      return
+    }
+    box.innerHTML = state.customServices
+      .map(
+        (c, i) =>
+          `<span class="inline-flex items-center gap-1 rounded-full border bg-background px-2 py-1">
+            ${escapeHtml(c.name)}
+            ${c.saveAsTemplate ? '<span class="text-primary">(模板)</span>' : ""}
+            <button type="button" data-wb-remove-custom="${i}" class="text-muted-foreground hover:text-destructive">×</button>
+          </span>`
+      )
+      .join("")
+  }
+
+  async function autoCopyAfterCreate(root: HTMLElement, state: RootState) {
+    const mode = q<HTMLSelectElement>(root, "[data-wb-auto-copy]")?.value || "email"
+    let text = ""
+    let label = ""
+    if (mode === "email") {
+      text = state.currentAddress
+      label = "邮箱"
+    } else if (mode === "password") {
+      text = state.currentPassword
+      label = "密码"
+    } else if (mode === "both") {
+      text =
+        state.currentAddress && state.currentPassword
+          ? `${state.currentAddress}---${state.currentPassword}`
+          : ""
+      label = "邮箱---密码"
+    } else {
+      return
+    }
+    if (!text) return
+    const ok = await copyText(text)
+    if (ok) showAlert(root, `已创建并复制${label}：${state.currentAddress}`)
+    else showAlert(root, `已创建 ${state.currentAddress}（自动复制失败，请手动复制）`, "error")
+  }
+
+  async function createMailbox(root: HTMLElement) {
+    const state = states.get(root)
+    if (!state) return
+    if (state.creating) {
+      showAlert(root, "正在创建中，请稍候…")
+      return
+    }
+    const domainEl = q<HTMLSelectElement>(root, "[data-wb-domain]")
+    const createBtn = q<HTMLButtonElement>(root, "[data-wb-create]")
+    if (!domainEl?.value) {
+      showAlert(root, "请选择邮箱后缀", "error")
+      return
+    }
+    state.creating = true
+    if (createBtn) {
+      createBtn.disabled = true
+      createBtn.textContent = "创建中…"
+    }
+    showAlert(root, "正在创建临时邮箱…")
+
+    const nextMode = getNextMode(root)
+    const payload: Record<string, unknown> = {
+      action: "create",
+      domain: domainEl.value,
+      previousAddress: state.currentAddress || null,
+      nextMode,
+    }
+    if (nextMode === "keep_with_services") {
+      payload.serviceTemplateIds = [...state.selectedTemplateIds]
+      payload.customServices = state.customServices
+    }
+
+    try {
+      let data: any
+      let attempts = 0
+      while (attempts < 3) {
+        attempts++
+        try {
+          data = await api(state.apiBase, { method: "POST", body: JSON.stringify(payload) })
+          break
+        } catch (e: any) {
+          if (e.status === 409 && attempts < 3) continue
+          throw e
+        }
+      }
+
+      state.currentAddress = data.data.address
+      state.currentPassword = data.data.password
+      const emailInput = q<HTMLInputElement>(root, "[data-wb-email]")
+      const passwordInput = q<HTMLInputElement>(root, "[data-wb-password]")
+      const statusEl = q<HTMLElement>(root, "[data-wb-status]")
+      const refreshBtn = q<HTMLButtonElement>(root, "[data-wb-refresh]")
+      const boundEl = q<HTMLElement>(root, "[data-wb-bound]")
+      const detailEl = q<HTMLElement>(root, "[data-wb-email-detail]")
+      if (emailInput) emailInput.value = state.currentAddress
+      if (passwordInput) passwordInput.value = state.currentPassword
+      if (statusEl) statusEl.textContent = "已就绪"
+      if (refreshBtn) refreshBtn.disabled = false
+      setOtpBar(root, state, null)
+      const parts: string[] = []
+      if (data.data.deletedPrevious) parts.push(`已删除上一邮箱 ${data.data.deletedPrevious}`)
+      if (data.data.boundServices?.length) {
+        parts.push(
+          `已绑定服务: ${data.data.boundServices.map((s: { name: string }) => s.name).join(", ")}`
+        )
+      }
+      if (boundEl) boundEl.textContent = parts.join(" · ")
+      if (detailEl) detailEl.innerHTML = "选择左侧邮件查看详情"
+      await autoCopyAfterCreate(root, state)
+      if ((q<HTMLSelectElement>(root, "[data-wb-auto-copy]")?.value || "email") === "none") {
+        showAlert(root, `已创建 ${state.currentAddress}`)
+      }
+      await refreshEmails(root)
+      const autoRefresh = q<HTMLInputElement>(root, "[data-wb-auto-refresh]")
+      if (autoRefresh?.checked) startPoll(root)
+      persistUiState(root, state)
+      // Sync sibling clone (desktop/mobile dual slot)
+      syncSiblingRoots(root, state)
+    } catch (e: any) {
+      console.error("[temp-workbench] create failed", e)
+      showAlert(root, e.message || "创建失败", "error")
+    } finally {
+      state.creating = false
+      if (createBtn) {
+        createBtn.disabled = !domainEl.value
+        createBtn.textContent = "随机创建"
+      }
+    }
+  }
+
+  function syncSiblingRoots(source: HTMLElement, state: RootState) {
+    document.querySelectorAll<HTMLElement>("[data-wb-root]").forEach((other) => {
+      if (other === source) return
+      const otherState = states.get(other)
+      if (!otherState) return
+      otherState.currentAddress = state.currentAddress
+      otherState.currentPassword = state.currentPassword
+      otherState.latestOtp = state.latestOtp
+      const emailInput = q<HTMLInputElement>(other, "[data-wb-email]")
+      const passwordInput = q<HTMLInputElement>(other, "[data-wb-password]")
+      const statusEl = q<HTMLElement>(other, "[data-wb-status]")
+      const refreshBtn = q<HTMLButtonElement>(other, "[data-wb-refresh]")
+      if (emailInput) emailInput.value = state.currentAddress
+      if (passwordInput) passwordInput.value = state.currentPassword
+      if (statusEl) statusEl.textContent = state.currentAddress ? "已就绪" : "尚未创建"
+      if (refreshBtn) refreshBtn.disabled = !state.currentAddress
+    })
+  }
+
+  async function refreshEmails(root: HTMLElement) {
+    const state = states.get(root)
+    if (!state?.currentAddress) return
+    try {
+      const data = await api(
+        `${state.apiBase}?action=emails&mailbox=${encodeURIComponent(state.currentAddress)}&limit=40`
+      )
+      const emails = data.data.emails || []
+      const countEl = q<HTMLElement>(root, "[data-wb-email-count]")
+      const listEl = q<HTMLElement>(root, "[data-wb-email-list]")
+      if (countEl) countEl.textContent = String(emails.length)
+
+      const withCode = emails.find((e: any) => e.code)
+      if (withCode) {
+        setOtpBar(
+          root,
+          state,
+          withCode.code,
+          `${withCode.fromAddress || ""} · ${formatTs(withCode.createdAt)} · ${withCode.subject || ""}`
+        )
+      } else if (!emails.length) {
+        setOtpBar(root, state, null)
+      }
+
+      if (!listEl) return
+      if (!emails.length) {
+        listEl.innerHTML =
+          '<p class="p-6 text-sm text-muted-foreground text-center">暂无邮件，可点击刷新</p>'
+        return
+      }
+      listEl.innerHTML = emails
+        .map(
+          (email: any) =>
+            `<button type="button" data-wb-email-id="${escapeHtml(email.id)}" class="w-full text-left px-3 py-3 hover:bg-muted/50 transition-colors">
+              <div class="flex items-start justify-between gap-2">
+                <div class="min-w-0 flex-1">
+                  <div class="text-sm font-medium truncate ${email.isRead ? "" : "font-semibold"}">${escapeHtml(email.subject || "(无主题)")}</div>
+                  <div class="text-xs text-muted-foreground truncate mt-0.5">${escapeHtml(email.fromName || email.fromAddress || "")}</div>
+                  <div class="text-xs text-muted-foreground line-clamp-2 mt-1">${escapeHtml(email.preview || "")}</div>
+                </div>
+                <div class="shrink-0 text-right space-y-1">
+                  ${email.code ? `<span class="inline-block rounded bg-primary/10 text-primary font-mono text-[11px] px-1.5 py-0.5">${escapeHtml(email.code)}</span>` : ""}
+                  <div class="text-[10px] text-muted-foreground">${formatTs(email.createdAt)}</div>
+                </div>
+              </div>
+            </button>`
+        )
+        .join("")
+    } catch (e: any) {
+      showAlert(root, e.message || "刷新失败", "error")
+    }
+  }
+
+  async function openEmail(root: HTMLElement, id: string) {
+    const state = states.get(root)
+    if (!state || !id) return
+    const detailEl = q<HTMLElement>(root, "[data-wb-email-detail]")
+    if (!detailEl) return
+    detailEl.innerHTML = '<p class="text-muted-foreground">加载中…</p>'
+    try {
+      const data = await api(`${state.apiBase}?action=email&id=${encodeURIComponent(id)}`)
+      const email = data.data
+      if (email.code) {
+        setOtpBar(
+          root,
+          state,
+          email.code,
+          `${email.fromAddress || ""} · ${formatTs(email.createdAt)} · ${email.subject || ""}`
+        )
+      }
+      detailEl.innerHTML = `
+        <div class="space-y-3">
+          <div>
+            <div class="font-semibold text-base text-foreground">${escapeHtml(email.subject || "(无主题)")}</div>
+            <div class="text-xs text-muted-foreground mt-1">
+              ${escapeHtml(email.fromName || email.fromAddress || "")}
+              ${email.fromName ? ` &lt;${escapeHtml(email.fromAddress)}&gt;` : ""}
+              · ${formatTs(email.createdAt)}
+            </div>
+          </div>
+          ${
+            email.code
+              ? `<div class="rounded-md bg-primary/10 border border-primary/20 px-3 py-2 flex flex-wrap items-center gap-2">
+                  <span class="text-sm">验证码</span>
+                  <span class="font-mono font-bold text-xl tracking-wider select-all">${escapeHtml(email.code)}</span>
+                  <button type="button" class="ml-auto h-9 px-4 rounded-full bg-primary text-primary-foreground text-xs font-medium" data-wb-copy-text="${escapeHtml(email.code)}">复制验证码</button>
+                </div>`
+              : ""
+          }
+          <div class="prose prose-sm max-w-none dark:prose-invert border-t pt-3">
+            ${email.html ? email.html : `<pre class="whitespace-pre-wrap font-sans text-sm">${escapeHtml(email.text || "(无内容)")}</pre>`}
+          </div>
+        </div>`
+    } catch (e: any) {
+      detailEl.innerHTML = `<p class="text-destructive">${escapeHtml(e.message || "加载失败")}</p>`
+    }
+  }
+
+  function startPoll(root: HTMLElement) {
+    const state = states.get(root)
+    if (!state) return
+    stopPoll(root)
+    state.pollTimer = window.setInterval(() => {
+      if (state.currentAddress) refreshEmails(root)
+    }, 8000)
+  }
+
+  function stopPoll(root: HTMLElement) {
+    const state = states.get(root)
+    if (!state?.pollTimer) return
+    clearInterval(state.pollTimer)
+    state.pollTimer = null
+  }
+
+  function initRoot(root: HTMLElement) {
+    if (states.has(root)) return
+    let ssr: {
+      defaultDomain?: string
+      domains?: string[]
+      templates?: Template[]
+      error?: string | null
+    } = {}
+    try {
+      ssr = JSON.parse(root.dataset.bootstrap || "{}")
+    } catch {
+      ssr = {}
+    }
+    const prefs = loadPrefs()
+    const state: RootState = {
+      root,
+      apiBase: root.dataset.api || "/api/admin/temp-workbench",
+      templates: Array.isArray(ssr.templates) ? ssr.templates : [],
+      selectedTemplateIds: new Set(prefs.templateIds || []),
+      customServices: [],
+      currentAddress: "",
+      currentPassword: "",
+      latestOtp: "",
+      pollTimer: null,
+      creating: false,
+    }
+    states.set(root, state)
+
+    // Prefer SSR domain options; apply saved domain if present
+    const domainEl = q<HTMLSelectElement>(root, "[data-wb-domain]")
+    if (domainEl && prefs.domain) {
+      const opt = [...domainEl.options].find((o) => o.value === prefs.domain)
+      if (opt) domainEl.value = prefs.domain
+    }
+    const autoCopyEl = q<HTMLSelectElement>(root, "[data-wb-auto-copy]")
+    if (autoCopyEl && prefs.autoCopy) autoCopyEl.value = prefs.autoCopy
+    const autoRefreshEl = q<HTMLInputElement>(root, "[data-wb-auto-refresh]")
+    if (autoRefreshEl && prefs.autoRefresh) autoRefreshEl.checked = true
+    setNextMode(root, prefs.nextMode || "auto_delete")
+    renderTemplates(root, state)
+    syncServicePanel(root)
+
+    // Soft-refresh templates/domains from API (optional)
+    api(`${state.apiBase}?action=bootstrap`)
+      .then((data) => {
+        if (data?.data?.templates) {
+          state.templates = data.data.templates
+          renderTemplates(root, state)
+        }
+        if (data?.data?.domains?.length && domainEl) {
+          const current = domainEl.value
+          const domains: string[] = data.data.domains
+          const preferred = prefs.domain && domains.includes(prefs.domain)
+            ? prefs.domain
+            : data.data.defaultDomain && domains.includes(data.data.defaultDomain)
+              ? data.data.defaultDomain
+              : domains[0]
+          domainEl.innerHTML = domains
+            .map(
+              (d) =>
+                `<option value="${escapeHtml(d)}" ${d === (current || preferred) ? "selected" : ""}>${escapeHtml(d)}</option>`
+            )
+            .join("")
+          const createBtn = q<HTMLButtonElement>(root, "[data-wb-create]")
+          if (createBtn) createBtn.disabled = false
+        }
+      })
+      .catch(() => {
+        // SSR already filled domains
+      })
+  }
+
+  // Init every dual-slot root once DOM is ready
+  function boot() {
+    document.querySelectorAll<HTMLElement>("[data-wb-root]").forEach(initRoot)
+    console.log(
+      "[temp-workbench] roots=",
+      document.querySelectorAll("[data-wb-root]").length,
+      "creates=",
+      document.querySelectorAll("[data-wb-create]").length
+    )
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot)
+  } else {
+    boot()
+  }
+
+  // Document-level delegation: works for both desktop and mobile clones
+  document.addEventListener("click", async (e) => {
+    const target = e.target as Element | null
+    if (!target) return
+
+    const createBtn = target.closest("[data-wb-create]") as HTMLElement | null
+    if (createBtn) {
+      e.preventDefault()
+      const root = createBtn.closest("[data-wb-root]") as HTMLElement | null
+      if (root) {
+        initRoot(root)
+        createMailbox(root)
+      }
+      return
+    }
+
+    const refreshBtn = target.closest("[data-wb-refresh]") as HTMLElement | null
+    if (refreshBtn) {
+      e.preventDefault()
+      const root = refreshBtn.closest("[data-wb-root]") as HTMLElement | null
+      if (root) {
+        initRoot(root)
+        refreshEmails(root)
+      }
+      return
+    }
+
+    const otpCopy = target.closest("[data-wb-otp-copy]") as HTMLElement | null
+    if (otpCopy) {
+      e.preventDefault()
+      const root = otpCopy.closest("[data-wb-root]") as HTMLElement | null
+      if (!root) return
+      initRoot(root)
+      const state = states.get(root)
+      if (!state?.latestOtp) return
+      const ok = await copyText(state.latestOtp)
+      flashBtn(otpCopy, ok)
+      return
+    }
+
+    const copyBtn = target.closest("[data-wb-copy]") as HTMLElement | null
+    if (copyBtn) {
+      e.preventDefault()
+      const root = copyBtn.closest("[data-wb-root]") as HTMLElement | null
+      if (!root) return
+      initRoot(root)
+      const state = states.get(root)
+      if (!state) return
+      const kind = copyBtn.getAttribute("data-wb-copy")
+      let text = ""
+      if (kind === "email") text = state.currentAddress || q<HTMLInputElement>(root, "[data-wb-email]")?.value || ""
+      else if (kind === "password")
+        text = state.currentPassword || q<HTMLInputElement>(root, "[data-wb-password]")?.value || ""
+      else if (kind === "both") {
+        const email = state.currentAddress || q<HTMLInputElement>(root, "[data-wb-email]")?.value || ""
+        const password =
+          state.currentPassword || q<HTMLInputElement>(root, "[data-wb-password]")?.value || ""
+        text = email && password ? `${email}---${password}` : ""
+      }
+      if (!text) return
+      const ok = await copyText(text)
+      flashBtn(copyBtn, ok)
+      return
+    }
+
+    const copyTextBtn = target.closest("[data-wb-copy-text]") as HTMLElement | null
+    if (copyTextBtn) {
+      e.preventDefault()
+      const ok = await copyText(copyTextBtn.getAttribute("data-wb-copy-text") || "")
+      flashBtn(copyTextBtn, ok)
+      return
+    }
+
+    const emailItem = target.closest("[data-wb-email-id]") as HTMLElement | null
+    if (emailItem) {
+      e.preventDefault()
+      const root = emailItem.closest("[data-wb-root]") as HTMLElement | null
+      if (!root) return
+      initRoot(root)
+      openEmail(root, emailItem.getAttribute("data-wb-email-id") || "")
+      return
+    }
+
+    const addCustom = target.closest("[data-wb-add-custom]") as HTMLElement | null
+    if (addCustom) {
+      e.preventDefault()
+      const root = addCustom.closest("[data-wb-root]") as HTMLElement | null
+      if (!root) return
+      initRoot(root)
+      const state = states.get(root)!
+      const name = q<HTMLInputElement>(root, "[data-wb-custom-name]")?.value.trim() || ""
+      const loginUrl = q<HTMLInputElement>(root, "[data-wb-custom-url]")?.value.trim() || ""
+      if (!name || !loginUrl) {
+        showAlert(root, "请填写服务名称和登录 URL", "error")
+        return
+      }
+      const saveAs = !!q<HTMLInputElement>(root, "[data-wb-save-template]")?.checked
+      state.customServices.push({ name, loginUrl, saveAsTemplate: saveAs })
+      const nameEl = q<HTMLInputElement>(root, "[data-wb-custom-name]")
+      const urlEl = q<HTMLInputElement>(root, "[data-wb-custom-url]")
+      const saveEl = q<HTMLInputElement>(root, "[data-wb-save-template]")
+      if (nameEl) nameEl.value = ""
+      if (urlEl) urlEl.value = ""
+      if (saveEl) saveEl.checked = false
+      renderCustoms(root, state)
+      return
+    }
+
+    const removeCustom = target.closest("[data-wb-remove-custom]") as HTMLElement | null
+    if (removeCustom) {
+      e.preventDefault()
+      const root = removeCustom.closest("[data-wb-root]") as HTMLElement | null
+      if (!root) return
+      initRoot(root)
+      const state = states.get(root)!
+      const idx = parseInt(removeCustom.getAttribute("data-wb-remove-custom") || "-1", 10)
+      if (idx >= 0) {
+        state.customServices.splice(idx, 1)
+        renderCustoms(root, state)
+      }
+    }
+  })
+
+  document.addEventListener("change", (e) => {
+    const target = e.target as Element | null
+    if (!target) return
+    const root = target.closest("[data-wb-root]") as HTMLElement | null
+    if (!root) return
+    initRoot(root)
+    const state = states.get(root)!
+
+    if (target.matches("[data-wb-next-mode]")) {
+      syncServicePanel(root)
+      persistUiState(root, state)
+      return
+    }
+    if (target.matches("[data-wb-domain]") || target.matches("[data-wb-auto-copy]")) {
+      persistUiState(root, state)
+      return
+    }
+    if (target.matches("[data-wb-auto-refresh]")) {
+      persistUiState(root, state)
+      const checked = (target as HTMLInputElement).checked
+      if (checked) startPoll(root)
+      else stopPoll(root)
+      return
+    }
+    if (target.matches("[data-wb-template-id]")) {
+      const id = (target as HTMLInputElement).getAttribute("data-wb-template-id") || ""
+      if ((target as HTMLInputElement).checked) state.selectedTemplateIds.add(id)
+      else state.selectedTemplateIds.delete(id)
+      persistUiState(root, state)
+      renderTemplates(root, state)
+    }
+  })
+
+  document.addEventListener("keydown", (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.key !== "Enter") return
+    // Prefer visible root
+    const roots = [...document.querySelectorAll<HTMLElement>("[data-wb-root]")]
+    const visible =
+      roots.find((r) => r.offsetParent !== null || r.getClientRects().length > 0) || roots[0]
+    if (!visible) return
+    e.preventDefault()
+    initRoot(visible)
+    createMailbox(visible)
+  })
+</script>

@@ -70,14 +70,15 @@ const formatAverage = (value: number) => {
 <AdminLayout title="概览">
   <div class="space-y-8 md:space-y-10">
     <Card className="relative overflow-hidden border-white/15">
-      <div class="absolute inset-0 bg-gradient-to-br from-primary/20 via-background/40 to-accent/20"></div>
-      <div class="absolute -left-16 top-0 h-40 w-40 rounded-full bg-primary/20 blur-3xl"></div>
-      <div class="absolute -right-10 bottom-0 h-32 w-32 rounded-full bg-accent/25 blur-3xl"></div>
+      <div class="pointer-events-none absolute inset-0 bg-gradient-to-br from-primary/20 via-background/40 to-accent/20"></div>
+      <div class="pointer-events-none absolute -left-16 top-0 h-40 w-40 rounded-full bg-primary/20 blur-3xl"></div>
+      <div class="pointer-events-none absolute -right-10 bottom-0 h-32 w-32 rounded-full bg-accent/25 blur-3xl"></div>
 
       <CardContent className="relative p-0">
-        <div class="grid gap-8 xl:grid-cols-[minmax(0,1.08fr)_minmax(0,0.92fr)] 2xl:gap-12">
-          <div class="space-y-7 p-6 md:p-8 xl:p-10 2xl:space-y-8 2xl:p-12">
-            <div class="flex flex-wrap items-center gap-3.5 text-xs font-medium">
+        <div class="grid min-w-0 gap-6 lg:grid-cols-2 lg:gap-8 xl:gap-10">
+          <!-- Left: greeting + quick stats -->
+          <div class="min-w-0 space-y-6 p-6 md:space-y-7 md:p-8 xl:p-10">
+            <div class="flex flex-wrap items-center gap-2.5 text-xs font-medium">
               <span class="inline-flex items-center gap-2 rounded-full border border-white/15 bg-background/70 px-3 py-1.5 text-foreground backdrop-blur-md">
                 <Sparkles className="h-3.5 w-3.5 text-primary" />
                 管理后台总览
@@ -94,74 +95,87 @@ const formatAverage = (value: number) => {
               </span>
             </div>
 
-            <div class="max-w-2xl space-y-4">
-              <h1 class="text-3xl font-semibold tracking-tight sm:text-4xl xl:text-[3.25rem] xl:leading-tight">欢迎回来，{admin.username}</h1>
-              <p class="max-w-xl text-sm leading-7 text-muted-foreground md:text-base md:leading-7">
+            <div class="min-w-0 space-y-3">
+              <h1 class="text-2xl font-semibold tracking-tight sm:text-3xl lg:text-4xl">欢迎回来</h1>
+              <p
+                class="break-all text-base font-medium leading-snug text-foreground/90 sm:text-lg lg:text-xl"
+                title={admin.username}
+              >
+                {admin.username}
+              </p>
+              <p class="max-w-xl text-sm leading-7 text-muted-foreground md:text-[15px] md:leading-7">
                 这里汇总了当前后台最关键的资源规模、邮箱分配情况和默认域名状态，方便你更快判断接下来该补用户、补邮箱，还是先完善收件配置。
               </p>
             </div>
 
-            <div class="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
-              <div class="rounded-3xl border border-white/10 bg-background/65 p-5 md:p-6 backdrop-blur-md">
-                <p class="text-xs uppercase tracking-[0.24em] text-muted-foreground">已分配邮箱</p>
-                <p class="mt-4 text-2xl font-semibold">{formatNumber(assignedMailboxes)}</p>
-                <p class="mt-3 text-sm leading-6 text-muted-foreground">当前占邮箱总量 {formatPercent(assignmentRate)}</p>
+            <div class="grid min-w-0 gap-3 sm:grid-cols-3">
+              <div class="min-w-0 rounded-2xl border border-white/10 bg-background/65 p-4 backdrop-blur-md sm:p-5">
+                <p class="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">已分配邮箱</p>
+                <p class="mt-3 text-2xl font-semibold tabular-nums">{formatNumber(assignedMailboxes)}</p>
+                <p class="mt-2 text-xs leading-5 text-muted-foreground sm:text-sm sm:leading-6">占总量 {formatPercent(assignmentRate)}</p>
               </div>
-              <div class="rounded-3xl border border-white/10 bg-background/65 p-5 md:p-6 backdrop-blur-md">
-                <p class="text-xs uppercase tracking-[0.24em] text-muted-foreground">待处理邮箱</p>
-                <p class="mt-4 text-2xl font-semibold">{formatNumber(unassignedMailboxes)}</p>
-                <p class="mt-3 text-sm leading-6 text-muted-foreground">未分配占比 {formatPercent(unassignedRate)}</p>
+              <div class="min-w-0 rounded-2xl border border-white/10 bg-background/65 p-4 backdrop-blur-md sm:p-5">
+                <p class="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">待处理邮箱</p>
+                <p class="mt-3 text-2xl font-semibold tabular-nums">{formatNumber(unassignedMailboxes)}</p>
+                <p class="mt-2 text-xs leading-5 text-muted-foreground sm:text-sm sm:leading-6">未分配 {formatPercent(unassignedRate)}</p>
               </div>
-              <div class="rounded-3xl border border-white/10 bg-background/65 p-5 md:p-6 backdrop-blur-md min-w-0 md:col-span-2 2xl:col-span-1">
-                <p class="text-xs uppercase tracking-[0.24em] text-muted-foreground">默认域名</p>
-                <p class="mt-4 truncate text-2xl font-semibold" title={domainLabel}>{domainLabel}</p>
-                <p class="mt-3 text-sm leading-6 text-muted-foreground">{domainConfigured ? "后台已填写正式域名" : "建议尽快补齐或替换"}</p>
+              <div class="min-w-0 rounded-2xl border border-white/10 bg-background/65 p-4 backdrop-blur-md sm:p-5">
+                <p class="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">默认域名</p>
+                <p class="mt-3 truncate text-lg font-semibold sm:text-xl" title={domainLabel}>{domainLabel}</p>
+                <p class="mt-2 text-xs leading-5 text-muted-foreground sm:text-sm sm:leading-6">{domainConfigured ? "已填写正式域名" : "建议尽快补齐"}</p>
               </div>
             </div>
           </div>
 
-          <div class="p-6 pt-0 md:p-8 md:pt-0 xl:px-10 xl:pb-10 xl:pl-0 xl:pt-10 2xl:p-12 2xl:pl-0">
-            <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-1">
-              <div class="rounded-3xl border border-white/10 bg-background/60 p-5 md:p-6 backdrop-blur-md">
-                <div class="flex items-center justify-between gap-3">
-                  <div>
+          <!-- Right: density metrics -->
+          <div class="min-w-0 border-t border-white/10 p-6 md:p-8 lg:border-l lg:border-t-0 xl:p-10">
+            <div class="grid min-w-0 gap-3 sm:grid-cols-2 lg:grid-cols-1">
+              <div class="min-w-0 rounded-2xl border border-white/10 bg-background/60 p-4 backdrop-blur-md sm:p-5">
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0">
                     <p class="text-sm font-medium">邮箱分配覆盖</p>
-                    <p class="mt-2 text-3xl font-semibold">{formatPercent(assignmentRate)}</p>
+                    <p class="mt-2 text-3xl font-semibold tabular-nums">{formatPercent(assignmentRate)}</p>
                   </div>
-                  <div class="rounded-full bg-primary/10 p-3 text-primary">
+                  <div class="shrink-0 rounded-full bg-primary/10 p-3 text-primary">
                     <Mail className="h-5 w-5" />
                   </div>
                 </div>
-                <div class="mt-5 h-2 overflow-hidden rounded-full bg-white/10">
-                  <div class="h-full rounded-full bg-primary" style={`width: ${formatPercent(assignmentRate)}`}></div>
+                <div class="mt-4 h-2 overflow-hidden rounded-full bg-white/10">
+                  <div class="h-full rounded-full bg-primary transition-all" style={`width: ${formatPercent(assignmentRate)}`}></div>
                 </div>
-                <p class="mt-4 text-sm leading-6 text-muted-foreground">{formatNumber(assignedMailboxes)} / {formatNumber(totalMailboxes)} 个邮箱已完成归属</p>
+                <p class="mt-3 text-sm leading-6 text-muted-foreground">
+                  {formatNumber(assignedMailboxes)} / {formatNumber(totalMailboxes)} 个邮箱已完成归属
+                </p>
               </div>
 
-              <div class="rounded-3xl border border-white/10 bg-background/60 p-5 md:p-6 backdrop-blur-md">
-                <div class="flex items-center justify-between gap-3">
-                  <div>
+              <div class="min-w-0 rounded-2xl border border-white/10 bg-background/60 p-4 backdrop-blur-md sm:p-5">
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0">
                     <p class="text-sm font-medium">人均邮箱</p>
-                    <p class="mt-2 text-3xl font-semibold">{formatAverage(mailboxesPerUser)}</p>
+                    <p class="mt-2 text-3xl font-semibold tabular-nums">{formatAverage(mailboxesPerUser)}</p>
                   </div>
-                  <div class="rounded-full bg-primary/10 p-3 text-primary">
+                  <div class="shrink-0 rounded-full bg-primary/10 p-3 text-primary">
                     <Users className="h-5 w-5" />
                   </div>
                 </div>
-                <p class="mt-5 text-sm leading-6 text-muted-foreground">基于当前 {formatNumber(totalUsers)} 位用户与 {formatNumber(totalMailboxes)} 个邮箱计算</p>
+                <p class="mt-4 text-sm leading-6 text-muted-foreground">
+                  基于当前 {formatNumber(totalUsers)} 位用户与 {formatNumber(totalMailboxes)} 个邮箱计算
+                </p>
               </div>
 
-              <div class="rounded-3xl border border-white/10 bg-background/60 p-5 md:col-span-2 md:p-6 backdrop-blur-md xl:col-span-1">
-                <div class="flex items-center justify-between gap-3">
-                  <div>
+              <div class="min-w-0 rounded-2xl border border-white/10 bg-background/60 p-4 backdrop-blur-md sm:col-span-2 sm:p-5 lg:col-span-1">
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0">
                     <p class="text-sm font-medium">收件密度</p>
-                    <p class="mt-2 text-3xl font-semibold">{formatAverage(emailsPerMailbox)}</p>
+                    <p class="mt-2 text-3xl font-semibold tabular-nums">{formatAverage(emailsPerMailbox)}</p>
                   </div>
-                  <div class="rounded-full bg-primary/10 p-3 text-primary">
+                  <div class="shrink-0 rounded-full bg-primary/10 p-3 text-primary">
                     <BarChart3 className="h-5 w-5" />
                   </div>
                 </div>
-                <p class="mt-5 text-sm leading-6 text-muted-foreground">平均每个邮箱累计约 {formatAverage(emailsPerMailbox)} 封邮件，每位用户约 {formatAverage(emailsPerUser)} 封</p>
+                <p class="mt-4 text-sm leading-6 text-muted-foreground">
+                  平均每邮箱约 {formatAverage(emailsPerMailbox)} 封，每用户约 {formatAverage(emailsPerUser)} 封
+                </p>
               </div>
             </div>
           </div>

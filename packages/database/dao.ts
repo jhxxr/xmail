@@ -684,6 +684,88 @@ export async function getEmail(db: DB, id: string): Promise<schema.Email | null>
   return db.select().from(schema.emails).where(eq(schema.emails.id, id)).get() ?? null
 }
 
+/** List row without heavy body columns — faster mailbox polls (CF temp-email style). */
+export type EmailSummary = {
+  id: string
+  mailboxAddress: string
+  fromAddress: string
+  fromName: string | null
+  subject: string | null
+  messageId: string | null
+  date: string | null
+  isStarred: boolean
+  isRead: boolean
+  createdAt: number
+}
+
+const emailSummaryColumns = {
+  id: schema.emails.id,
+  mailboxAddress: schema.emails.mailboxAddress,
+  fromAddress: schema.emails.fromAddress,
+  fromName: schema.emails.fromName,
+  subject: schema.emails.subject,
+  messageId: schema.emails.messageId,
+  date: schema.emails.date,
+  isStarred: schema.emails.isStarred,
+  isRead: schema.emails.isRead,
+  createdAt: schema.emails.createdAt,
+}
+
+export async function listEmailSummaries(
+  db: DB,
+  mailboxAddress: string,
+  options: { limit?: number; offset?: number } = {}
+): Promise<EmailSummary[]> {
+  const { limit = 20, offset = 0 } = options
+  return db
+    .select(emailSummaryColumns)
+    .from(schema.emails)
+    .where(eq(schema.emails.mailboxAddress, mailboxAddress))
+    .orderBy(desc(schema.emails.createdAt))
+    .limit(limit)
+    .offset(offset)
+    .all()
+}
+
+export async function listAllEmailSummaries(
+  db: DB,
+  options: { limit?: number; offset?: number; mailboxAddress?: string } = {}
+): Promise<EmailSummary[]> {
+  const { limit = 20, offset = 0, mailboxAddress } = options
+  const query = db.select(emailSummaryColumns).from(schema.emails)
+  if (mailboxAddress) {
+    return query
+      .where(eq(schema.emails.mailboxAddress, mailboxAddress))
+      .orderBy(desc(schema.emails.createdAt))
+      .limit(limit)
+      .offset(offset)
+      .all()
+  }
+  return query.orderBy(desc(schema.emails.createdAt)).limit(limit).offset(offset).all()
+}
+
+export async function countEmailsByMailbox(db: DB, mailboxAddress: string): Promise<number> {
+  const result = await db
+    .select({ count: count() })
+    .from(schema.emails)
+    .where(eq(schema.emails.mailboxAddress, mailboxAddress))
+    .get()
+  return result?.count ?? 0
+}
+
+export async function countAllEmails(db: DB, mailboxAddress?: string): Promise<number> {
+  if (mailboxAddress) return countEmailsByMailbox(db, mailboxAddress)
+  const result = await db.select({ count: count() }).from(schema.emails).get()
+  return result?.count ?? 0
+}
+
+export async function deleteEmailsByMailbox(db: DB, mailboxAddress: string): Promise<number> {
+  const result = await db
+    .delete(schema.emails)
+    .where(eq(schema.emails.mailboxAddress, mailboxAddress))
+  return result.rowsAffected ?? 0
+}
+
 export async function getEmailsByMailbox(db: DB, mailboxAddress: string, options: { limit?: number; offset?: number } = {}): Promise<schema.Email[]> {
   const { limit = 50, offset = 0 } = options
   return db.select().from(schema.emails).where(eq(schema.emails.mailboxAddress, mailboxAddress)).orderBy(desc(schema.emails.createdAt)).limit(limit).offset(offset).all()
@@ -817,8 +899,16 @@ export async function getMailDomain(db: DB): Promise<string> {
 
 export async function getMailDomains(db: DB): Promise<string[]> {
   const domains = await getSetting(db, "mail_domains")
-  if (!domains) return []
-  return domains.split(",").map((d) => d.trim()).filter(Boolean)
+  const fromList = domains
+    ? domains.split(",").map((d) => d.trim()).filter(Boolean)
+    : []
+  if (fromList.length > 0) return fromList
+
+  // Fall back to default_mail_domain when multi-domain list is empty
+  const defaultDomain = await getSetting(db, "default_mail_domain")
+  if (defaultDomain) return [defaultDomain]
+
+  return []
 }
 
 // ============ 统计 ============
@@ -1382,4 +1472,195 @@ export async function revokeApiKey(db: DB, id: string): Promise<void> {
 
 export async function deleteApiKey(db: DB, id: string): Promise<void> {
   await db.delete(schema.apiKeys).where(eq(schema.apiKeys.id, id))
+}
+
+// ============ OAuth 收信账号 ============
+
+function generateOauthShareToken(): string {
+  return `xmail_oauth_${nanoid(32)}`
+}
+
+export async function createOauthMailAccount(
+  db: DB,
+  input: {
+    email: string
+    clientId: string
+    encryptedRefreshToken: string
+    encryptedPassword?: string | null
+    note?: string | null
+    provider?: string
+    createdBy?: string | null
+    status?: string
+  }
+): Promise<schema.OauthMailAccount> {
+  const timestamp = now()
+  const account: schema.InsertOauthMailAccount = {
+    id: nanoid(),
+    email: input.email.toLowerCase().trim(),
+    provider: input.provider || "outlook",
+    clientId: input.clientId.trim(),
+    encryptedRefreshToken: input.encryptedRefreshToken,
+    encryptedPassword: input.encryptedPassword ?? null,
+    shareToken: generateOauthShareToken(),
+    note: input.note ?? null,
+    status: input.status || "active",
+    lastError: null,
+    lastSyncAt: null,
+    refreshTokenUpdatedAt: timestamp,
+    createdBy: input.createdBy ?? null,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }
+  await db.insert(schema.oauthMailAccounts).values(account)
+  return account as schema.OauthMailAccount
+}
+
+export type OauthMailAccountImportRow = {
+  email: string
+  clientId: string
+  encryptedRefreshToken: string
+  encryptedPassword?: string | null
+  note?: string | null
+  provider?: string
+}
+
+export async function createOauthMailAccountsBulk(
+  db: DB,
+  rows: OauthMailAccountImportRow[],
+  createdBy?: string | null,
+  options: { upsert?: boolean } = {}
+): Promise<{
+  added: schema.OauthMailAccount[]
+  updated: schema.OauthMailAccount[]
+  skipped: string[]
+  /** Account ids whose credentials changed (for token cache invalidation). */
+  credentialChangedIds: string[]
+}> {
+  const added: schema.OauthMailAccount[] = []
+  const updated: schema.OauthMailAccount[] = []
+  const skipped: string[] = []
+  const credentialChangedIds: string[] = []
+  const upsert = options.upsert !== false // default: update existing credentials
+
+  for (const row of rows) {
+    const email = row.email.toLowerCase().trim()
+    const existing = await getOauthMailAccountByEmail(db, email)
+    if (existing) {
+      if (!upsert) {
+        skipped.push(email)
+        continue
+      }
+      try {
+        await updateOauthMailAccount(db, existing.id, {
+          clientId: row.clientId.trim(),
+          encryptedRefreshToken: row.encryptedRefreshToken,
+          encryptedPassword: row.encryptedPassword ?? existing.encryptedPassword,
+          note: row.note !== undefined && row.note !== null ? row.note : existing.note,
+          status: "active",
+          lastError: null,
+          refreshTokenUpdatedAt: now(),
+        })
+        credentialChangedIds.push(existing.id)
+        const refreshed = await getOauthMailAccount(db, existing.id)
+        if (refreshed) updated.push(refreshed)
+      } catch {
+        skipped.push(email)
+      }
+      continue
+    }
+    try {
+      const account = await createOauthMailAccount(db, {
+        ...row,
+        email,
+        createdBy,
+      })
+      added.push(account)
+      credentialChangedIds.push(account.id)
+    } catch {
+      skipped.push(email)
+    }
+  }
+  return { added, updated, skipped, credentialChangedIds }
+}
+
+export async function listOauthMailAccounts(db: DB): Promise<schema.OauthMailAccount[]> {
+  return db
+    .select()
+    .from(schema.oauthMailAccounts)
+    .orderBy(desc(schema.oauthMailAccounts.createdAt))
+    .all()
+}
+
+export async function getOauthMailAccount(db: DB, id: string): Promise<schema.OauthMailAccount | undefined> {
+  return db.select().from(schema.oauthMailAccounts).where(eq(schema.oauthMailAccounts.id, id)).get()
+}
+
+export async function getOauthMailAccountByEmail(db: DB, email: string): Promise<schema.OauthMailAccount | undefined> {
+  return db
+    .select()
+    .from(schema.oauthMailAccounts)
+    .where(eq(schema.oauthMailAccounts.email, email.toLowerCase().trim()))
+    .get()
+}
+
+export async function getOauthMailAccountByShareToken(
+  db: DB,
+  shareToken: string
+): Promise<schema.OauthMailAccount | undefined> {
+  return db
+    .select()
+    .from(schema.oauthMailAccounts)
+    .where(eq(schema.oauthMailAccounts.shareToken, shareToken.trim()))
+    .get()
+}
+
+export async function updateOauthMailAccount(
+  db: DB,
+  id: string,
+  data: Partial<
+    Pick<
+      schema.OauthMailAccount,
+      | "clientId"
+      | "encryptedRefreshToken"
+      | "encryptedPassword"
+      | "note"
+      | "status"
+      | "lastError"
+      | "lastSyncAt"
+      | "refreshTokenUpdatedAt"
+      | "shareToken"
+    >
+  >
+): Promise<void> {
+  const cleaned: Record<string, unknown> = { updatedAt: now() }
+  for (const [key, value] of Object.entries(data)) {
+    if (value !== undefined) cleaned[key] = value
+  }
+  await db
+    .update(schema.oauthMailAccounts)
+    .set(cleaned)
+    .where(eq(schema.oauthMailAccounts.id, id))
+}
+
+export async function deleteOauthMailAccount(db: DB, id: string): Promise<void> {
+  await db.delete(schema.oauthMailAccounts).where(eq(schema.oauthMailAccounts.id, id))
+}
+
+export async function regenerateOauthShareToken(db: DB, id: string): Promise<string | null> {
+  const account = await getOauthMailAccount(db, id)
+  if (!account) return null
+  const shareToken = generateOauthShareToken()
+  await updateOauthMailAccount(db, id, { shareToken })
+  return shareToken
+}
+
+export async function setOauthMailAccountStatus(
+  db: DB,
+  id: string,
+  status: string,
+  lastError?: string | null
+): Promise<void> {
+  const patch: { status: string; lastError?: string | null } = { status }
+  if (lastError !== undefined) patch.lastError = lastError
+  await updateOauthMailAccount(db, id, patch)
 }

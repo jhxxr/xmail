@@ -12,7 +12,8 @@ import {
   X,
   ExternalLink,
   Key,
-  ShieldCheck
+  ShieldCheck,
+  Zap
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -22,9 +23,11 @@ interface SidebarProps {
 
 const menuItems = [
   { href: '/admin', icon: LayoutDashboard, label: '概览', exact: true },
+  { href: '/admin/temp-workbench', icon: Zap, label: '临时工作台' },
   { href: '/admin/users', icon: Users, label: '用户管理' },
   { href: '/admin/mailboxes', icon: Mail, label: '邮箱管理' },
   { href: '/admin/external', icon: ExternalLink, label: '第三方邮箱' },
+  { href: '/admin/oauth-accounts', icon: Mail, label: 'OAuth 邮箱' },
   { href: '/admin/two-factor', icon: ShieldCheck, label: '2FA 管理' },
   { href: '/admin/services', icon: Globe, label: '服务管理' },
   { href: '/admin/trash', icon: Trash2, label: '回收站' },

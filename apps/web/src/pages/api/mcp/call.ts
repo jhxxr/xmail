@@ -3,6 +3,16 @@ import { createDB } from "database"
 import * as dao from "database/dao"
 import { authenticateApiKey, unauthorizedResponse } from "../../../lib/api-auth"
 import { extractVerificationCode } from "../../../lib/utils"
+import { encryptSecret, isEncryptionKeyConfigured } from "../../../lib/crypto"
+import { parseOutlookImportLines } from "../../../lib/oauth-import"
+import {
+  findVerificationCodeInMailbox,
+  invalidateAccessTokenCache,
+  listMessages,
+  probeStoredAccount,
+  probeStoredAccountsBatch,
+  withAccountToken,
+} from "../../../lib/ms-graph"
 
 /**
  * MCP工具调用端点
@@ -21,10 +31,15 @@ export const POST: APIRoute = async (context) => {
   }
 
   const db = createDB(context.locals.runtime.env.DB)
+  const encryptionKey = context.locals.runtime.env.ENCRYPTION_KEY
 
   try {
-    const body = await context.request.json()
-    const { tool, arguments: args } = body
+    const body = (await context.request.json()) as {
+      tool?: string
+      arguments?: Record<string, any>
+    }
+    const tool = body.tool
+    const args = body.arguments || {}
 
     if (!tool) {
       return new Response(JSON.stringify({
@@ -42,7 +57,7 @@ export const POST: APIRoute = async (context) => {
     switch (tool) {
       // ========== 验证码相关 ==========
       case "get_verification_code":
-        result = await handleGetVerificationCode(db, args)
+        result = await handleGetVerificationCode(db, args, encryptionKey)
         break
 
       // ========== 用户管理 ==========
@@ -143,10 +158,18 @@ export const POST: APIRoute = async (context) => {
 
       // ========== 邮件查询 ==========
       case "list_emails":
-        result = await dao.getEmailsByMailbox(db, args.mailbox, {
-          limit: args.limit,
-          offset: args.offset
-        })
+        // Prefer lightweight summaries unless full body requested
+        if (args.full) {
+          result = await dao.getEmailsByMailbox(db, args.mailbox, {
+            limit: args.limit,
+            offset: args.offset
+          })
+        } else {
+          result = await dao.listEmailSummaries(db, args.mailbox, {
+            limit: args.limit ?? 20,
+            offset: args.offset ?? 0
+          })
+        }
         break
       case "get_email":
         result = await dao.getEmail(db, args.id)
@@ -255,6 +278,29 @@ export const POST: APIRoute = async (context) => {
         result = await dao.batchBindServicesToMailboxes(db, args.mailboxes, args.templateIds || [], args.customServices || [])
         break
 
+      // ========== OAuth 邮箱 ==========
+      case "import_oauth_accounts":
+        result = await handleImportOauthAccounts(db, args, encryptionKey)
+        break
+      case "list_oauth_accounts":
+        result = await handleListOauthAccounts(db)
+        break
+      case "get_oauth_verification_code":
+        result = await handleGetOauthVerificationCode(db, args, encryptionKey)
+        break
+      case "list_oauth_emails":
+        result = await handleListOauthEmails(db, args, encryptionKey)
+        break
+      case "delete_oauth_account":
+        result = await handleDeleteOauthAccount(db, args)
+        break
+      case "regenerate_oauth_share_token":
+        result = await handleRegenerateOauthShareToken(db, args)
+        break
+      case "probe_oauth_account":
+        result = await handleProbeOauthAccount(db, args, encryptionKey)
+        break
+
       default:
         return new Response(JSON.stringify({
           success: false,
@@ -290,9 +336,9 @@ export const POST: APIRoute = async (context) => {
 
 /**
  * 处理验证码获取
- * 改进：始终返回完整邮件内容，方便AI进行二次分析
+ * 本地 D1 无结果时回退到 OAuth Graph 账号
  */
-async function handleGetVerificationCode(db: any, args: any) {
+async function handleGetVerificationCode(db: any, args: any, encryptionKey?: string) {
   const { mailbox, seconds = 600 } = args
 
   if (!mailbox) {
@@ -314,11 +360,11 @@ async function handleGetVerificationCode(db: any, args: any) {
       || extractVerificationCode(email.subject, null)
 
     if (code) {
-      // 找到验证码：返回提取的验证码 + 完整邮件内容
       return {
         success: true,
         code,
         confidence: 'high',
+        source: 'local',
         email: {
           id: email.id,
           subject: email.subject,
@@ -332,10 +378,29 @@ async function handleGetVerificationCode(db: any, args: any) {
     }
   }
 
-  // 未找到验证码：返回最新邮件的完整内容
   const latestEmail = emails[0]
+  if (latestEmail) {
+    return {
+      success: false,
+      code: null,
+      confidence: 'none',
+      source: 'local',
+      message: "No verification code extracted by algorithm. Please check the full email content manually or use AI to analyze.",
+      email: {
+        id: latestEmail.id,
+        subject: latestEmail.subject,
+        sender: latestEmail.fromAddress,
+        sender_name: latestEmail.fromName,
+        received_at: latestEmail.createdAt,
+        text: latestEmail.text,
+        html: latestEmail.html
+      }
+    }
+  }
 
-  if (!latestEmail) {
+  // 本地无邮件：尝试 OAuth 账号
+  const oauthAccount = await dao.getOauthMailAccountByEmail(db, mailbox)
+  if (!oauthAccount) {
     return {
       success: false,
       code: null,
@@ -344,20 +409,268 @@ async function handleGetVerificationCode(db: any, args: any) {
     }
   }
 
+  if (!isEncryptionKeyConfigured(encryptionKey)) {
+    throw new Error("ENCRYPTION_KEY not configured for OAuth accounts")
+  }
+
+  return handleGetOauthVerificationCode(db, {
+    email: mailbox,
+    seconds,
+    folder: "all",
+  }, encryptionKey)
+}
+
+function publicOauthAccount(account: {
+  id: string
+  email: string
+  provider: string
+  clientId: string
+  shareToken: string
+  note: string | null
+  status: string
+  lastError: string | null
+  lastSyncAt: number | null
+  createdAt: number
+  updatedAt: number
+}) {
+  return {
+    id: account.id,
+    email: account.email,
+    provider: account.provider,
+    client_id: account.clientId,
+    share_token: account.shareToken,
+    note: account.note,
+    status: account.status,
+    last_error: account.lastError,
+    last_sync_at: account.lastSyncAt,
+    created_at: account.createdAt,
+    updated_at: account.updatedAt,
+  }
+}
+
+async function resolveOauthAccountFromArgs(db: any, args: any) {
+  if (args.account_id || args.id) {
+    const account = await dao.getOauthMailAccount(db, args.account_id || args.id)
+    if (account) return account
+  }
+  if (args.share_token || args.key) {
+    const account = await dao.getOauthMailAccountByShareToken(db, args.share_token || args.key)
+    if (account) return account
+  }
+  if (args.email || args.mailbox) {
+    const account = await dao.getOauthMailAccountByEmail(db, args.email || args.mailbox)
+    if (account) return account
+  }
+  return null
+}
+
+async function handleImportOauthAccounts(db: any, args: any, encryptionKey?: string) {
+  if (!isEncryptionKeyConfigured(encryptionKey)) {
+    throw new Error("ENCRYPTION_KEY not configured")
+  }
+  const text = args.text || args.account_string
+  if (!text || typeof text !== "string") {
+    throw new Error("Missing required parameter: text")
+  }
+
+  const parsed = parseOutlookImportLines(text)
+  if (parsed.accounts.length === 0) {
+    return {
+      success: false,
+      message: "No valid accounts to import",
+      parse_errors: parsed.errors,
+      added: [],
+      updated: [],
+      skipped: [],
+    }
+  }
+
+  const rows = []
+  for (const account of parsed.accounts) {
+    rows.push({
+      email: account.email,
+      clientId: account.clientId,
+      encryptedRefreshToken: await encryptSecret(account.refreshToken, encryptionKey!),
+      encryptedPassword: account.password
+        ? await encryptSecret(account.password, encryptionKey!)
+        : null,
+      note: args.note || null,
+      provider: "outlook",
+    })
+  }
+
+  const result = await dao.createOauthMailAccountsBulk(db, rows)
+  for (const id of result.credentialChangedIds) {
+    invalidateAccessTokenCache(id)
+  }
+
+  // 导入不测活，避免批量打微软 token 接口 / 触发 Worker 限制
+  return {
+    success: true,
+    added: result.added.map(publicOauthAccount),
+    updated: result.updated.map(publicOauthAccount),
+    skipped: result.skipped,
+    parse_errors: parsed.errors,
+  }
+}
+
+async function handleListOauthAccounts(db: any) {
+  const accounts = await dao.listOauthMailAccounts(db)
+  return {
+    success: true,
+    count: accounts.length,
+    accounts: accounts.map(publicOauthAccount),
+  }
+}
+
+async function handleGetOauthVerificationCode(db: any, args: any, encryptionKey?: string) {
+  if (!isEncryptionKeyConfigured(encryptionKey)) {
+    throw new Error("ENCRYPTION_KEY not configured")
+  }
+
+  const account = await resolveOauthAccountFromArgs(db, args)
+  if (!account) {
+    throw new Error("OAuth account not found (provide email, share_token, or account_id)")
+  }
+
+  const seconds = typeof args.seconds === "number" ? args.seconds : 600
+  if (seconds < 0 || seconds > 86400) {
+    throw new Error("Invalid seconds parameter (must be 0-86400)")
+  }
+  const folder = args.folder || "all"
+  const receivedSinceMs = Date.now() - seconds * 1000
+
+  const result = await withAccountToken(db, account, encryptionKey!, async (accessToken) => {
+    const found = await findVerificationCodeInMailbox(accessToken, extractVerificationCode, {
+      folder,
+      top: 10,
+      receivedSinceMs,
+      maxDetailFetches: 3,
+    })
+    if (!found.success) throw new Error(found.error)
+    return found.data
+  })
+
+  if (!result.success) {
+    return {
+      success: false,
+      code: null,
+      error: result.error,
+      auth_error: result.authError || false,
+      source: "oauth",
+      account_email: account.email,
+    }
+  }
+
+  const data = result.data
+  if (data.code) {
+    return {
+      success: true,
+      code: data.code,
+      confidence: "high",
+      source: "oauth",
+      account_email: account.email,
+      subject: data.subject,
+      sender: data.sender,
+      sender_name: data.sender_name,
+      received_at: data.received_at,
+      message_id: data.message_id,
+    }
+  }
+
   return {
     success: false,
     code: null,
-    confidence: 'none',
-    message: "No verification code extracted by algorithm. Please check the full email content manually or use AI to analyze.",
-    email: {
-      id: latestEmail.id,
-      subject: latestEmail.subject,
-      sender: latestEmail.fromAddress,
-      sender_name: latestEmail.fromName,
-      received_at: latestEmail.createdAt,
-      text: latestEmail.text,
-      html: latestEmail.html
+    confidence: "none",
+    source: "oauth",
+    account_email: account.email,
+    message: "No verification code found in recent emails",
+    latest_email: data.latest_email,
+  }
+}
+
+async function handleListOauthEmails(db: any, args: any, encryptionKey?: string) {
+  if (!isEncryptionKeyConfigured(encryptionKey)) {
+    throw new Error("ENCRYPTION_KEY not configured")
+  }
+
+  const account = await resolveOauthAccountFromArgs(db, args)
+  if (!account) {
+    throw new Error("OAuth account not found (provide email, share_token, or account_id)")
+  }
+
+  const folder = args.folder || "inbox"
+  const top = Math.min(Math.max(Number(args.top) || 20, 1), 50)
+
+  const result = await withAccountToken(db, account, encryptionKey!, async (accessToken) => {
+    const listed = await listMessages(accessToken, { folder, top, skip: 0 })
+    if (!listed.success) throw new Error(listed.error)
+    return listed.emails
+  })
+
+  if (!result.success) {
+    return {
+      success: false,
+      error: result.error,
+      auth_error: result.authError || false,
+      account_email: account.email,
     }
+  }
+
+  return {
+    success: true,
+    account_email: account.email,
+    folder,
+    emails: result.data,
+  }
+}
+
+async function handleDeleteOauthAccount(db: any, args: any) {
+  let id = args.id || args.account_id
+  if (!id && (args.email || args.mailbox)) {
+    const account = await dao.getOauthMailAccountByEmail(db, args.email || args.mailbox)
+    id = account?.id
+  }
+  if (!id) throw new Error("Missing id or email")
+
+  const account = await dao.getOauthMailAccount(db, id)
+  if (!account) throw new Error("OAuth account not found")
+
+  await dao.deleteOauthMailAccount(db, id)
+  invalidateAccessTokenCache(id)
+  return { success: true, deleted: account.email }
+}
+
+async function handleRegenerateOauthShareToken(db: any, args: any) {
+  let id = args.id || args.account_id
+  if (!id && (args.email || args.mailbox)) {
+    const account = await dao.getOauthMailAccountByEmail(db, args.email || args.mailbox)
+    id = account?.id
+  }
+  if (!id) throw new Error("Missing id or email")
+
+  const shareToken = await dao.regenerateOauthShareToken(db, id)
+  if (!shareToken) throw new Error("OAuth account not found")
+  return { success: true, id, share_token: shareToken }
+}
+
+async function handleProbeOauthAccount(db: any, args: any, encryptionKey?: string) {
+  if (!isEncryptionKeyConfigured(encryptionKey)) {
+    throw new Error("ENCRYPTION_KEY not configured")
+  }
+  if (args.all) {
+    const accounts = await dao.listOauthMailAccounts(db)
+    const probe = await probeStoredAccountsBatch(db, accounts, encryptionKey!, 3)
+    return { success: true, ...probe }
+  }
+  const account = await resolveOauthAccountFromArgs(db, args)
+  if (!account) throw new Error("OAuth account not found")
+  const probe = await probeStoredAccount(db, account, encryptionKey!)
+  const fresh = await dao.getOauthMailAccount(db, account.id)
+  return {
+    success: probe.ok,
+    error: probe.error,
+    account: fresh ? publicOauthAccount(fresh) : null,
   }
 }
 
