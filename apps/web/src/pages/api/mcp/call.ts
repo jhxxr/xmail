@@ -11,6 +11,7 @@ import {
   listMessages,
   probeStoredAccount,
   probeStoredAccountsBatch,
+  refreshStoredAccountToken,
   withAccountToken,
 } from "../../../lib/ms-graph"
 
@@ -299,6 +300,9 @@ export const POST: APIRoute = async (context) => {
         break
       case "probe_oauth_account":
         result = await handleProbeOauthAccount(db, args, encryptionKey)
+        break
+      case "refresh_oauth_token":
+        result = await handleRefreshOauthToken(db, args, encryptionKey)
         break
 
       default:
@@ -670,6 +674,37 @@ async function handleProbeOauthAccount(db: any, args: any, encryptionKey?: strin
   return {
     success: probe.ok,
     error: probe.error,
+    account: fresh ? publicOauthAccount(fresh) : null,
+  }
+}
+
+/**
+ * 手动轮换 refresh_token（强制），并重置轮换时钟
+ */
+async function handleRefreshOauthToken(db: any, args: any, encryptionKey?: string) {
+  if (!isEncryptionKeyConfigured(encryptionKey)) {
+    throw new Error("ENCRYPTION_KEY not configured")
+  }
+  const account = await resolveOauthAccountFromArgs(db, args)
+  if (!account) {
+    throw new Error("OAuth account not found (provide email, share_token, or id)")
+  }
+
+  const result = await refreshStoredAccountToken(db, account, encryptionKey!)
+  const fresh = await dao.getOauthMailAccount(db, account.id)
+  const ageDaysBefore =
+    result.ageSecBefore === null ? null : Math.floor(result.ageSecBefore / 86400)
+
+  return {
+    success: result.ok,
+    error: result.error,
+    rotated: result.rotated,
+    age_days_before: ageDaysBefore,
+    message: result.ok
+      ? result.rotated
+        ? "refresh_token 已轮换，轮换时钟已重置（建议 5-10 天后再刷）"
+        : "凭证有效，但微软未返回新 refresh_token，沿用原令牌"
+      : undefined,
     account: fresh ? publicOauthAccount(fresh) : null,
   }
 }

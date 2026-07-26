@@ -1036,5 +1036,18 @@ export const MCP_TOOLS: MCPTool[] = [
       },
       required: []
     }
+  },
+  {
+    name: "refresh_oauth_token",
+    description: "手动轮换 OAuth 账号的 refresh_token 并重置轮换时钟。日常收信会在 RT 满 7 天时自动轮换，本工具用于提前强制刷新。建议 5-10 天一次，不要短时间内反复调用（频繁换 RT 会增加微软风控概率）。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "账号 ID" },
+        email: { type: "string", description: "邮箱地址（与 id 二选一）" },
+        share_token: { type: "string", description: "分享令牌（与 id/email 三选一）" }
+      },
+      required: []
+    }
   }
 ]

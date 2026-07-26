@@ -27,8 +27,40 @@ export const GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 const LAST_SYNC_WRITE_INTERVAL_SEC = 5 * 60
 const ACCESS_TOKEN_TTL_MS = 50 * 60 * 1000
 const ACCESS_TOKEN_CACHE_MAX = 500
+
+/**
+ * 存量 refresh_token 达到该年龄后，才把微软返回的新 RT 落库。
+ * 取 5-10 天建议区间的中位：每次拉信都换 RT 会增加风控概率，
+ * 太久不换又有 RT 自然过期（微软对不活跃 RT 约 90 天）的风险。
+ */
+const RT_ROTATE_MIN_AGE_SEC = 7 * 24 * 60 * 60
+/** RT 年龄超过该值视为「建议尽快刷新」，供管理界面提示。 */
+export const RT_ROTATE_STALE_AGE_SEC = 10 * 24 * 60 * 60
+
 type CachedAccessToken = { accessToken: string; expiresAt: number }
 const accessTokenCache = new Map<string, CachedAccessToken>()
+
+/**
+ * 是否把微软返回的新 RT 写回数据库。
+ * @param force 管理员手动刷新时跳过节流
+ */
+function shouldRotateRefreshToken(
+  account: OauthMailAccount,
+  nowSec: number,
+  force = false
+): boolean {
+  if (force) return true
+  const updatedAt = account.refreshTokenUpdatedAt
+  // 老数据没有时间戳：落库一次把轮换时钟建立起来
+  if (!updatedAt) return true
+  return nowSec - updatedAt >= RT_ROTATE_MIN_AGE_SEC
+}
+
+/** RT 距上次轮换的秒数（无时间戳返回 null）。 */
+export function refreshTokenAgeSec(account: OauthMailAccount, nowSec?: number): number | null {
+  if (!account.refreshTokenUpdatedAt) return null
+  return (nowSec ?? Math.floor(Date.now() / 1000)) - account.refreshTokenUpdatedAt
+}
 
 function getCachedAccessToken(accountId: string): string | null {
   const entry = accessTokenCache.get(accountId)
@@ -509,37 +541,46 @@ export async function applyProbeToAccount(
   db: DB,
   account: OauthMailAccount,
   encryptionKey: string,
-  probe: Awaited<ReturnType<typeof probeGraphCredentials>>
-): Promise<void> {
+  probe: Awaited<ReturnType<typeof probeGraphCredentials>>,
+  options: { forceRotate?: boolean } = {}
+): Promise<{ rotated: boolean }> {
   invalidateAccessTokenCache(account.id)
   if (!probe.success) {
     await updateOauthMailAccount(db, account.id, {
       status: probe.authError ? "auth_error" : account.status,
       lastError: probe.error,
     })
-    return
+    return { rotated: false }
   }
+
+  const nowSec = Math.floor(Date.now() / 1000)
+  // RT 轮换按年龄节流；管理员手动刷新时 forceRotate 跳过节流
+  const rotate = Boolean(
+    probe.refreshToken && shouldRotateRefreshToken(account, nowSec, options.forceRotate)
+  )
 
   await updateOauthMailAccount(db, account.id, {
     status: "active",
     lastError: probe.warning || null,
-    lastSyncAt: Math.floor(Date.now() / 1000),
-    ...(probe.refreshToken
+    lastSyncAt: nowSec,
+    ...(rotate
       ? {
-          encryptedRefreshToken: await encryptSecret(probe.refreshToken, encryptionKey),
-          refreshTokenUpdatedAt: Math.floor(Date.now() / 1000),
+          encryptedRefreshToken: await encryptSecret(probe.refreshToken!, encryptionKey),
+          refreshTokenUpdatedAt: nowSec,
         }
       : {}),
   })
   if (probe.graphMailOk || probe.tokenKind === "graph") {
     setCachedAccessToken(account.id, probe.accessToken)
   }
+  return { rotated: rotate }
 }
 
 export async function probeStoredAccount(
   db: DB,
   account: OauthMailAccount,
-  encryptionKey: string
+  encryptionKey: string,
+  options: { forceRotate?: boolean } = {}
 ): Promise<{
   ok: boolean
   error?: string
@@ -547,6 +588,7 @@ export async function probeStoredAccount(
   tokenKind?: string
   graphMailOk?: boolean
   attemptLabel?: string
+  rotated?: boolean
 }> {
   if (!account.clientId?.trim()) {
     return { ok: false, error: "client_id 为空" }
@@ -567,7 +609,7 @@ export async function probeStoredAccount(
   }
 
   const probe = await probeGraphCredentials(account.clientId, refreshToken)
-  await applyProbeToAccount(db, account, encryptionKey, probe)
+  const { rotated } = await applyProbeToAccount(db, account, encryptionKey, probe, options)
 
   if (!probe.success) {
     return { ok: false, error: probe.error }
@@ -582,6 +624,7 @@ export async function probeStoredAccount(
       tokenKind: probe.tokenKind,
       graphMailOk: false,
       attemptLabel: probe.attemptLabel,
+      rotated,
     }
   }
 
@@ -591,6 +634,33 @@ export async function probeStoredAccount(
     graphMailOk: probe.graphMailOk,
     attemptLabel: probe.attemptLabel,
     warning: probe.warning,
+    rotated,
+  }
+}
+
+/**
+ * 管理员手动刷新 refresh_token：强制把微软返回的新 RT 落库并重置轮换时钟。
+ * 建议 5-10 天一次，不要短时间内反复调用。
+ */
+export async function refreshStoredAccountToken(
+  db: DB,
+  account: OauthMailAccount,
+  encryptionKey: string
+): Promise<{
+  ok: boolean
+  error?: string
+  warning?: string
+  rotated: boolean
+  ageSecBefore: number | null
+}> {
+  const ageSecBefore = refreshTokenAgeSec(account)
+  const result = await probeStoredAccount(db, account, encryptionKey, { forceRotate: true })
+  return {
+    ok: result.ok,
+    error: result.error,
+    warning: result.warning,
+    rotated: Boolean(result.rotated),
+    ageSecBefore,
   }
 }
 
@@ -1147,7 +1217,13 @@ export async function withAccountToken<T>(
   const nowSec = Math.floor(Date.now() / 1000)
   const patches: Parameters<typeof updateOauthMailAccount>[2] = {}
 
-  if (tokenResult.refreshToken && tokenResult.refreshToken !== refreshToken) {
+  // 微软几乎每次刷新都会返回新 RT，但每次都落库等于高频轮换，会增加风控概率。
+  // 只有存量 RT 达到 RT_ROTATE_MIN_AGE_SEC 才写回（手动刷新走 refreshStoredAccountToken 强制轮换）。
+  if (
+    tokenResult.refreshToken &&
+    tokenResult.refreshToken !== refreshToken &&
+    shouldRotateRefreshToken(account, nowSec)
+  ) {
     patches.encryptedRefreshToken = await encryptSecret(tokenResult.refreshToken, encryptionKey)
     patches.refreshTokenUpdatedAt = nowSec
   }

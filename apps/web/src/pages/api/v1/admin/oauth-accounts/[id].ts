@@ -13,6 +13,7 @@ import { verifyToken } from "../../../../../lib/auth"
 import {
   invalidateAccessTokenCache,
   probeStoredAccount,
+  refreshStoredAccountToken,
 } from "../../../../../lib/ms-graph"
 import { encryptSecret, isEncryptionKeyConfigured } from "../../../../../lib/crypto"
 
@@ -214,6 +215,42 @@ export const POST: APIRoute = async (context) => {
           : null,
       }),
       { status: probe.ok ? 200 : 502, headers: { "Content-Type": "application/json" } }
+    )
+  }
+
+  // 手动轮换 refresh_token（建议 5-10 天一次，不要短时间反复调用）
+  if (action === "rotate-rt" || action === "refresh-token") {
+    const encryptionKey = context.locals.runtime.env.ENCRYPTION_KEY
+    if (!isEncryptionKeyConfigured(encryptionKey)) {
+      return new Response(
+        JSON.stringify({ success: false, error: "ENCRYPTION_KEY not configured" }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
+      )
+    }
+    const result = await refreshStoredAccountToken(db, account, encryptionKey!)
+    const fresh = await getOauthMailAccount(db, id)
+    if (auth.adminId) {
+      await createLog(db, {
+        adminId: auth.adminId,
+        action: "oauth_rotate_rt",
+        target: account.email,
+        details: { ok: result.ok, rotated: result.rotated, ageSecBefore: result.ageSecBefore },
+        ip: context.request.headers.get("cf-connecting-ip") || undefined,
+      })
+    }
+    return new Response(
+      JSON.stringify({
+        success: result.ok,
+        error: result.error,
+        data: {
+          rotated: result.rotated,
+          age_sec_before: result.ageSecBefore,
+          refresh_token_updated_at: fresh?.refreshTokenUpdatedAt ?? null,
+          status: fresh?.status ?? null,
+          last_error: fresh?.lastError ?? null,
+        },
+      }),
+      { status: result.ok ? 200 : 502, headers: { "Content-Type": "application/json" } }
     )
   }
 

@@ -117,7 +117,7 @@ claude mcp get xmail
 列出 XMail 中所有可用的工具
 ```
 
-如果配置成功，Claude 会列出所有 54 个可用工具。
+如果配置成功，Claude 会列出所有 55 个可用工具。
 
 ## 核心功能与使用场景
 
@@ -536,10 +536,13 @@ Claude 会依次调用：
 - `delete_oauth_account` - 删除 OAuth 账号
 - `regenerate_oauth_share_token` - 轮换分享令牌
 - `probe_oauth_account` - 测活 Graph 凭证（支持 all）
+- `refresh_oauth_token` - 手动强制轮换 refresh_token 并重置轮换时钟
 
 说明：`get_verification_code` 在本地 D1 无邮件时，会自动回退到同地址的 OAuth 账号。
 
-**总计：54 个工具**
+refresh_token 轮换策略：日常收信只用存量 RT 换访问令牌，不写回微软返回的新 RT；存量 RT 满 7 天后才轮换一次（超过 10 天管理后台标黄）。频繁换 RT 会增加风控概率，需要提前刷新时用 `refresh_oauth_token`，建议 5-10 天一次。
+
+**总计：55 个工具**
 
 ## API 端点
 

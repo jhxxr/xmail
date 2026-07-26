@@ -17,6 +17,9 @@ import {
   invalidateAccessTokenCache,
   probeStoredAccount,
   probeStoredAccountsBatch,
+  refreshStoredAccountToken,
+  refreshTokenAgeSec,
+  RT_ROTATE_STALE_AGE_SEC,
 } from "../../lib/ms-graph"
 // 注意：导入不自动测活；probe* 仅用于手动「测活 / 批量测活」
 import { formatDate } from "../../lib/utils"
@@ -140,6 +143,39 @@ if (Astro.request.method === "POST") {
         }
         messageType = probe.failed > 0 && probe.ok === 0 ? "error" : "success"
       }
+    } else if (action === "rotate_rt") {
+      const id = formData.get("id")?.toString()
+      if (!id) {
+        message = "缺少账号 id"
+        messageType = "error"
+      } else if (!isEncryptionKeyConfigured(encryptionKey)) {
+        message = "ENCRYPTION_KEY 未配置，无法刷新 refresh_token"
+        messageType = "error"
+      } else {
+        const account = (await listOauthMailAccounts(db)).find((a) => a.id === id)
+        if (!account) {
+          message = "账号不存在"
+          messageType = "error"
+        } else {
+          const result = await refreshStoredAccountToken(db, account, encryptionKey!)
+          await createLog(db, {
+            adminId: admin.id,
+            action: "oauth_rotate_rt",
+            target: account.email,
+            details: { ok: result.ok, rotated: result.rotated },
+          })
+          if (result.ok && result.rotated) {
+            message = `已刷新 refresh_token: ${account.email}（轮换时钟已重置，建议 5-10 天后再刷）`
+            messageType = "success"
+          } else if (result.ok) {
+            message = `${account.email} 凭证有效，但微软未返回新 refresh_token，沿用原令牌`
+            messageType = "success"
+          } else {
+            message = `刷新失败: ${account.email} — ${result.error || "未知错误"}`
+            messageType = "error"
+          }
+        }
+      }
     } else if (action === "delete") {
       const id = formData.get("id")?.toString()
       if (id) {
@@ -201,6 +237,16 @@ try {
 const origin = Astro.url.origin
 const encryptionReady = isEncryptionKeyConfigured(encryptionKey)
 const msClientConfigured = Boolean(Astro.locals.runtime.env.MS_CLIENT_ID)
+
+const RT_STALE_DAYS = Math.round(RT_ROTATE_STALE_AGE_SEC / 86400)
+
+function describeRtAge(ageSec: number | null): { label: string; stale: boolean } {
+  if (ageSec === null) return { label: "令牌年龄未知（导入后未轮换）", stale: true }
+  const days = Math.floor(ageSec / 86400)
+  const stale = ageSec >= RT_ROTATE_STALE_AGE_SEC
+  if (days <= 0) return { label: "令牌今天已刷新", stale: false }
+  return { label: `令牌 ${days} 天前刷新`, stale }
+}
 ---
 
 <AdminLayout title="OAuth 邮箱">
@@ -210,6 +256,10 @@ const msClientConfigured = Boolean(Astro.locals.runtime.env.MS_CLIENT_ID)
         <h1 class="text-2xl font-bold">OAuth 邮箱</h1>
         <p class="text-muted-foreground text-sm mt-1">
           导入 Outlook/Hotmail 等微软账号，通过 Graph 按需收信。每个账号有独立分享令牌。
+        </p>
+        <p class="text-muted-foreground text-xs mt-1">
+          收信时只用存量 refresh_token 换取访问令牌；RT 满 7 天才自动轮换一次，避免高频换 RT 触发风控。
+          需要时可点账号上的「刷新令牌」立即轮换。
         </p>
       </div>
       <div class="flex gap-2">
@@ -295,6 +345,7 @@ const msClientConfigured = Boolean(Astro.locals.runtime.env.MS_CLIENT_ID)
         ) : (
           accounts.map((account) => {
             const shareUrl = `${origin}/?oauth_key=${encodeURIComponent(account.shareToken)}`
+            const rtAge = describeRtAge(refreshTokenAgeSec(account))
             const statusVariant =
               account.status === "active"
                 ? "default"
@@ -320,6 +371,12 @@ const msClientConfigured = Boolean(Astro.locals.runtime.env.MS_CLIENT_ID)
                       创建 {formatDate(account.createdAt)}
                       {account.lastSyncAt ? ` · 最近同步 ${formatDate(account.lastSyncAt)}` : ""}
                     </p>
+                    <p
+                      class={`text-xs mt-1 ${rtAge.stale ? "text-amber-600 dark:text-amber-500" : "text-muted-foreground"}`}
+                    >
+                      {rtAge.label}
+                      {rtAge.stale ? ` · 超过 ${RT_STALE_DAYS} 天，建议点「刷新令牌」` : ""}
+                    </p>
                   </div>
                   <div class="flex flex-wrap gap-2">
                     <form method="POST">
@@ -327,6 +384,23 @@ const msClientConfigured = Boolean(Astro.locals.runtime.env.MS_CLIENT_ID)
                       <input type="hidden" name="id" value={account.id} />
                       <Button type="submit" size="sm" variant="outline" title="测活 Graph 凭证">
                         测活
+                      </Button>
+                    </form>
+                    <form
+                      method="POST"
+                      onsubmit="return confirm('确定刷新此账号的 refresh_token？\n\n建议 5-10 天刷新一次；短时间内频繁刷新会增加微软风控概率。')"
+                    >
+                      <input type="hidden" name="action" value="rotate_rt" />
+                      <input type="hidden" name="id" value={account.id} />
+                      <Button
+                        type="submit"
+                        size="sm"
+                        variant={rtAge.stale ? "default" : "outline"}
+                        title="强制轮换 refresh_token 并重置轮换时钟"
+                        disabled={!encryptionReady}
+                      >
+                        <KeyRound className="w-3.5 h-3.5 mr-1" />
+                        刷新令牌
                       </Button>
                     </form>
                     <form method="POST">

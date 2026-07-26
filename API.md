@@ -44,6 +44,23 @@ Authorization: Bearer <jwt>
 
 认证：`Authorization: Bearer sk_live_...`
 
+所有下列接口均支持 CORS（浏览器扩展可直接调用），并响应 `OPTIONS` 预检。
+
+### 接口一览
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/v1/admin/mailbox/domains` | 邮箱域名列表 |
+| POST | `/api/v1/admin/mailbox/create` | 创建邮箱（可随机 / 指定 / 先删后建） |
+| DELETE/POST | `/api/v1/admin/mailbox/delete` | 删除邮箱 |
+| GET | `/api/v1/admin/mailbox/emails` | 列邮件（含验证码预提取） |
+| GET | `/api/v1/admin/mailbox/emails/:id` | 邮件详情 |
+| GET | `/api/v1/admin/verification-code` | 最新验证码 |
+| GET/POST | `/api/v1/admin/service-templates` | 服务模板列表 / 创建 |
+| GET/POST | `/api/v1/admin/temp-workbench` | 工作台聚合接口（扩展一站式） |
+
+---
+
 ### 获取最新验证码
 
 优先查本地 D1（先扫标题摘要，需要时再读正文）；若本地无邮件则回退到同地址 OAuth 账号（Microsoft Graph）。
@@ -97,50 +114,7 @@ curl -H "Authorization: Bearer sk_live_abc12345.xyz..." \
   "https://your-xmail-domain.com/api/v1/admin/verification-code?mailbox=test@example.com&seconds=300"
 ```
 
-**Python:**
-
-```python
-import requests
-
-api_key = "sk_live_abc12345.xyz..."
-response = requests.get(
-    "https://your-xmail-domain.com/api/v1/admin/verification-code",
-    headers={"Authorization": f"Bearer {api_key}"},
-    params={"mailbox": "test@example.com", "seconds": 600},
-)
-data = response.json()
-print(data["data"].get("code"))
-```
-
-### 创建邮箱（返回密码）
-
-**端点：** `POST /api/v1/admin/mailbox/create`
-
-**请求体：**
-
-- `address` (可选): 完整邮箱
-- `local_part` / `domain` (可选): 组合创建
-- `note` (可选)
-- `password` (可选): 自定义密码
-
-**响应：**
-
-```json
-{
-  "success": true,
-  "data": {
-    "address": "user@example.com",
-    "password": "AbcD12EfGh"
-  }
-}
-```
-
-```bash
-curl -X POST "https://your-xmail-domain.com/api/v1/admin/mailbox/create" \
-  -H "Authorization: Bearer sk_live_abc12345.xyz..." \
-  -H "Content-Type: application/json" \
-  -d '{"local_part":"user","domain":"example.com","note":"API 创建"}'
-```
+---
 
 ### 获取邮箱后缀（域名列表）
 
@@ -154,6 +128,184 @@ curl -X POST "https://your-xmail-domain.com/api/v1/admin/mailbox/create" \
     "domains": ["example.com", "example.net"]
   }
 }
+```
+
+---
+
+### 创建邮箱（返回密码）
+
+**端点：** `POST /api/v1/admin/mailbox/create`
+
+**请求体：**
+
+| 字段 | 说明 |
+| --- | --- |
+| `address` | 完整邮箱（可选） |
+| `local_part` / `domain` | 组合创建（可选） |
+| `domain` only | **随机**生成本地部分（员工风格名） |
+| `random: true` | 强制随机 |
+| `note` | 备注 |
+| `password` | 自定义密码（可选） |
+| `delete_previous` | 创建前先软删除该邮箱地址（可选） |
+
+**随机创建示例：**
+
+```bash
+curl -X POST "https://your-xmail-domain.com/api/v1/admin/mailbox/create" \
+  -H "Authorization: Bearer sk_live_..." \
+  -H "Content-Type: application/json" \
+  -d '{"domain":"example.com","note":"extension"}'
+```
+
+**指定创建：**
+
+```bash
+curl -X POST "https://your-xmail-domain.com/api/v1/admin/mailbox/create" \
+  -H "Authorization: Bearer sk_live_..." \
+  -H "Content-Type: application/json" \
+  -d '{"local_part":"user","domain":"example.com","note":"API 创建"}'
+```
+
+**响应：**
+
+```json
+{
+  "success": true,
+  "data": {
+    "address": "john.smith42@example.com",
+    "password": "AbcD12EfGh",
+    "deleted_previous": null
+  }
+}
+```
+
+---
+
+### 删除邮箱
+
+**端点：**
+
+- `DELETE /api/v1/admin/mailbox/delete?address=user@example.com`
+- 或 `POST /api/v1/admin/mailbox/delete` + `{"address":"user@example.com"}`
+
+```json
+{ "success": true, "data": { "deleted": "user@example.com" } }
+```
+
+---
+
+### 列邮件
+
+**端点：** `GET /api/v1/admin/mailbox/emails?mailbox=user@example.com&limit=40&offset=0`
+
+每封邮件含 `preview` 与自动提取的 `code`（无则为 null）。
+
+```json
+{
+  "success": true,
+  "data": {
+    "mailbox": "user@example.com",
+    "emails": [
+      {
+        "id": "...",
+        "subject": "Your code is 123456",
+        "fromAddress": "noreply@service.com",
+        "fromName": "Service",
+        "createdAt": 1733385600,
+        "isRead": false,
+        "isStarred": false,
+        "preview": "...",
+        "code": "123456"
+      }
+    ]
+  }
+}
+```
+
+---
+
+### 邮件详情
+
+**端点：** `GET /api/v1/admin/mailbox/emails/:id`
+
+返回 `text` / 消毒后的 `html` / `code`。首次读取会标记已读。
+
+---
+
+### 服务模板
+
+**列表：** `GET /api/v1/admin/service-templates`
+
+```json
+{
+  "success": true,
+  "data": {
+    "templates": [
+      { "id": "...", "name": "GitHub", "loginUrl": "https://github.com/login", "note": null }
+    ]
+  }
+}
+```
+
+**创建：** `POST /api/v1/admin/service-templates`
+
+```json
+{ "name": "GitHub", "loginUrl": "https://github.com/login", "note": "可选" }
+```
+
+---
+
+### 临时邮箱工作台（扩展 / 自动化 一站式）
+
+与管理面板 `/admin/temp-workbench` 对齐。也可用上面的细粒度接口组合实现。
+
+**端点：** `GET|POST /api/v1/admin/temp-workbench`
+
+#### GET `?action=bootstrap`
+
+域名 + 服务模板。
+
+#### GET `?action=emails&mailbox=...&limit=40`
+
+#### GET `?action=email&id=...`
+
+#### POST 创建
+
+```json
+{
+  "action": "create",
+  "domain": "example.com",
+  "previousAddress": "old@example.com",
+  "nextMode": "auto_delete",
+  "serviceTemplateIds": [],
+  "customServices": []
+}
+```
+
+- `nextMode`: `auto_delete` | `keep_with_services` | `none`
+- `auto_delete`：创建前删除 `previousAddress`
+- `keep_with_services`：不删上一邮箱，并为新邮箱绑定服务
+
+**响应：**
+
+```json
+{
+  "success": true,
+  "data": {
+    "address": "john.smith42@example.com",
+    "password": "AbcD12EfGh",
+    "deletedPrevious": "old@example.com",
+    "boundServices": [],
+    "nextMode": "auto_delete"
+  }
+}
+```
+
+```bash
+curl -X POST "https://your-xmail-domain.com/api/v1/admin/temp-workbench" \
+  -H "Authorization: Bearer sk_live_..." \
+  -H "Content-Type: application/json" \
+  -d '{"action":"create","domain":"example.com","nextMode":"auto_delete"}'
 ```
 
 ---
@@ -424,6 +576,35 @@ email----client_id----refresh_token
 - `POST /api/v1/admin/oauth-accounts/:id` `{"action":"reauthorize","client_id":"…","refresh_token":"…"}` — 更新凭证并测活  
 - 批量导入 / 微软授权回调后会自动测活  
 
+### refresh_token 轮换策略
+
+微软几乎每次用 RT 换取访问令牌都会返回一个新 RT。**每次收信都落库新 RT = 高频轮换，会增加风控概率**，因此：
+
+- 日常收信只用存量 RT 换访问令牌（AT 在内存缓存约 50 分钟），**不写回新 RT**
+- 存量 RT 满 **7 天**后，下一次刷新才把新 RT 落库并重置 `refresh_token_updated_at`
+- 超过 **10 天**未轮换的账号，管理后台会标黄提示
+- 导入时没有轮换时间戳的老账号，首次刷新会落库一次以建立时钟
+
+需要提前轮换时手动触发：
+
+**端点：** `POST /api/v1/admin/oauth-accounts/:id`  
+**Body：** `{"action":"rotate-rt"}`（别名 `refresh-token`）
+
+```json
+{
+  "success": true,
+  "data": {
+    "rotated": true,
+    "age_sec_before": 691200,
+    "refresh_token_updated_at": 1753500000,
+    "status": "active",
+    "last_error": null
+  }
+}
+```
+
+`rotated: false` 表示凭证有效但微软未返回新 RT，此时沿用原令牌。建议 5-10 天刷新一次，不要短时间内反复调用。
+
 ### MCP 工具（OAuth）
 
 | 工具 | 说明 |
@@ -435,6 +616,7 @@ email----client_id----refresh_token
 | `delete_oauth_account` | 删除账号 |
 | `regenerate_oauth_share_token` | 轮换分享令牌 |
 | `probe_oauth_account` | 测活（支持 `all: true`） |
+| `refresh_oauth_token` | 手动强制轮换 refresh_token（建议 5-10 天一次） |
 
 `get_verification_code` 在本地无邮件时也会自动回退到同地址 OAuth 账号。
 

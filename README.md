@@ -6,7 +6,7 @@
 [![Astro](https://img.shields.io/badge/Astro-5-BC52EE?logo=astro&logoColor=white)](https://github.com/jhxxr/xmail)
 [![React](https://img.shields.io/badge/React-19-149ECA?logo=react&logoColor=white)](https://github.com/jhxxr/xmail)
 [![pnpm](https://img.shields.io/badge/pnpm-10+-F69220?logo=pnpm&logoColor=white)](https://github.com/jhxxr/xmail)
-[![MCP](https://img.shields.io/badge/MCP-54_tools-5865F2)](MCP.md)
+[![MCP](https://img.shields.io/badge/MCP-55_tools-5865F2)](MCP.md)
 
 ## 功能
 
@@ -17,7 +17,7 @@
 - **管理员仪表盘**：展示用户、邮箱、邮件、分配状态等统计信息，并提供邮件与操作日志清理能力。
 - **2FA 管理**：导入、生成、分配和使用 TOTP；支持二维码扫描与手动输入密钥。
 - **第三方账号**：管理外部邮箱服务商、账号和关联服务，并按用户授权访问（凭证库，不拉信）。
-- **OAuth 邮箱**：导入 Outlook/Hotmail 等微软 OAuth 账号，经 Microsoft Graph 按需收信；每个账号有可分享的长期令牌（`/?oauth_key=`）。
+- **OAuth 邮箱**：导入 Outlook/Hotmail 等微软 OAuth 账号，经 Microsoft Graph 按需收信；每个账号有可分享的长期令牌（`/?oauth_key=`）。refresh_token 满 7 天才轮换一次，避免高频换 RT 触发风控，也可手动刷新。
 - **临时工作台**：管理员单页创建随机邮箱、复制凭据、实时收信取码；支持「下次自动删除」或「下次带服务创建」。
 - **API 与 MCP**：使用独立 API Key 调用 REST / MCP（54+ 工具）。
 - **CF Temp Email 兼容 API**：兼容 `cloudflare_temp_email` 的路径与响应形状（`/admin/new_address`、`/api/mails`、`/api/parsed_mails`、`/api/otp` 等），便于接入已有外部工具。
@@ -302,7 +302,7 @@ https://your-domain/api/mcp
 cp .mcp.json.example .mcp.json
 ```
 
-当前源码提供 54+ 个 MCP 工具，覆盖验证码、用户、邮箱、OAuth、共享邮箱、邮件搜索、清理、统计、日志和服务绑定等操作。完整配置与示例见 [MCP.md](MCP.md)。
+当前源码提供 55+ 个 MCP 工具，覆盖验证码、用户、邮箱、OAuth、共享邮箱、邮件搜索、清理、统计、日志和服务绑定等操作。完整配置与示例见 [MCP.md](MCP.md)。
 
 
 ## 数据模型
