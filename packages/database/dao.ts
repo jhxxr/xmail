@@ -18,6 +18,18 @@ function uniqueChunks(values: string[]): string[][] {
   return chunks
 }
 
+// Multi-row INSERT binds one parameter per column, so keep batches well under
+// the same statement ceiling.
+const D1_INSERT_CHUNK_SIZE = 20
+
+function insertChunks<T>(rows: T[]): T[][] {
+  const chunks: T[][] = []
+  for (let index = 0; index < rows.length; index += D1_INSERT_CHUNK_SIZE) {
+    chunks.push(rows.slice(index, index + D1_INSERT_CHUNK_SIZE))
+  }
+  return chunks
+}
+
 export function createDB(d1: D1LikeDatabase) {
   return drizzle(d1, { schema })
 }
@@ -1542,53 +1554,117 @@ export async function createOauthMailAccountsBulk(
   const credentialChangedIds: string[] = []
   const upsert = options.upsert !== false // default: update existing credentials
 
+  // 一次性把已存在的账号捞出来，避免每行一次 SELECT（大批量导入时是主要 D1 开销）
+  const emails = [...new Set(rows.map((r) => r.email.toLowerCase().trim()))]
+  const existingRows = (await Promise.all(
+    uniqueChunks(emails).map((chunk) =>
+      db.select()
+        .from(schema.oauthMailAccounts)
+        .where(inArray(schema.oauthMailAccounts.email, chunk))
+        .all()
+    )
+  )).flat()
+  const existingByEmail = new Map(existingRows.map((a) => [a.email, a]))
+
+  const newAccounts: schema.InsertOauthMailAccount[] = []
+
   for (const row of rows) {
     const email = row.email.toLowerCase().trim()
-    const existing = await getOauthMailAccountByEmail(db, email)
+    const existing = existingByEmail.get(email)
     if (existing) {
       if (!upsert) {
         skipped.push(email)
         continue
       }
+      const patch = {
+        clientId: row.clientId.trim(),
+        encryptedRefreshToken: row.encryptedRefreshToken,
+        encryptedPassword: row.encryptedPassword ?? existing.encryptedPassword,
+        note: row.note !== undefined && row.note !== null ? row.note : existing.note,
+        status: "active",
+        lastError: null,
+        refreshTokenUpdatedAt: now(),
+      }
       try {
-        await updateOauthMailAccount(db, existing.id, {
-          clientId: row.clientId.trim(),
-          encryptedRefreshToken: row.encryptedRefreshToken,
-          encryptedPassword: row.encryptedPassword ?? existing.encryptedPassword,
-          note: row.note !== undefined && row.note !== null ? row.note : existing.note,
-          status: "active",
-          lastError: null,
-          refreshTokenUpdatedAt: now(),
-        })
+        await updateOauthMailAccount(db, existing.id, patch)
         credentialChangedIds.push(existing.id)
-        const refreshed = await getOauthMailAccount(db, existing.id)
-        if (refreshed) updated.push(refreshed)
+        // 补一次读只为拼返回值，改用本地已知的 patch 合成
+        updated.push({ ...existing, ...patch, updatedAt: now() } as schema.OauthMailAccount)
       } catch {
         skipped.push(email)
       }
       continue
     }
-    try {
-      const account = await createOauthMailAccount(db, {
-        ...row,
-        email,
-        createdBy,
-      })
-      added.push(account)
-      credentialChangedIds.push(account.id)
-    } catch {
+    // 同一批次里重复出现的邮箱只保留第一条，否则会撞唯一索引
+    if (newAccounts.some((a) => a.email === email)) {
       skipped.push(email)
+      continue
+    }
+    const timestamp = now()
+    newAccounts.push({
+      id: nanoid(),
+      email,
+      provider: row.provider || "outlook",
+      clientId: row.clientId.trim(),
+      encryptedRefreshToken: row.encryptedRefreshToken,
+      encryptedPassword: row.encryptedPassword ?? null,
+      shareToken: generateOauthShareToken(),
+      note: row.note ?? null,
+      status: "active",
+      lastError: null,
+      lastSyncAt: null,
+      refreshTokenUpdatedAt: timestamp,
+      createdBy: createdBy ?? null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    })
+  }
+
+  // 分块批量插入，把 N 次 INSERT 压成 ceil(N/chunk) 次
+  for (const chunk of insertChunks(newAccounts)) {
+    try {
+      await db.insert(schema.oauthMailAccounts).values(chunk)
+      for (const account of chunk) {
+        added.push(account as schema.OauthMailAccount)
+        credentialChangedIds.push(account.id)
+      }
+    } catch {
+      // 整块失败时退化为逐行插入，定位到具体冲突的邮箱
+      for (const account of chunk) {
+        try {
+          await db.insert(schema.oauthMailAccounts).values(account)
+          added.push(account as schema.OauthMailAccount)
+          credentialChangedIds.push(account.id)
+        } catch {
+          skipped.push(account.email)
+        }
+      }
     }
   }
+
   return { added, updated, skipped, credentialChangedIds }
 }
 
-export async function listOauthMailAccounts(db: DB): Promise<schema.OauthMailAccount[]> {
+export async function listOauthMailAccounts(
+  db: DB,
+  options: { limit?: number; offset?: number } = {}
+): Promise<schema.OauthMailAccount[]> {
+  const { limit = 50, offset = 0 } = options
   return db
     .select()
     .from(schema.oauthMailAccounts)
     .orderBy(desc(schema.oauthMailAccounts.createdAt))
+    .limit(limit)
+    .offset(offset)
     .all()
+}
+
+export async function countOauthMailAccounts(db: DB): Promise<number> {
+  const result = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(schema.oauthMailAccounts)
+    .get()
+  return result?.count ?? 0
 }
 
 export async function getOauthMailAccount(db: DB, id: string): Promise<schema.OauthMailAccount | undefined> {
@@ -1646,9 +1722,15 @@ export async function deleteOauthMailAccount(db: DB, id: string): Promise<void> 
   await db.delete(schema.oauthMailAccounts).where(eq(schema.oauthMailAccounts.id, id))
 }
 
-export async function regenerateOauthShareToken(db: DB, id: string): Promise<string | null> {
-  const account = await getOauthMailAccount(db, id)
-  if (!account) return null
+export async function regenerateOauthShareToken(
+  db: DB,
+  id: string,
+  options: { skipExistsCheck?: boolean } = {}
+): Promise<string | null> {
+  if (!options.skipExistsCheck) {
+    const account = await getOauthMailAccount(db, id)
+    if (!account) return null
+  }
   const shareToken = generateOauthShareToken()
   await updateOauthMailAccount(db, id, { shareToken })
   return shareToken
@@ -1663,4 +1745,159 @@ export async function setOauthMailAccountStatus(
   const patch: { status: string; lastError?: string | null } = { status }
   if (lastError !== undefined) patch.lastError = lastError
   await updateOauthMailAccount(db, id, patch)
+}
+
+// ============ OAuth 账号服务绑定 ============
+
+export type OauthAccountServiceDetails = {
+  id: string
+  name: string
+  loginUrl: string
+  note: string | null
+  isCustom: boolean
+  templateId: string | null
+  expiresAt: number | null
+}
+
+export type OauthAccountServicesMap = Record<string, OauthAccountServiceDetails[]>
+
+// 绑定全局服务模板
+export async function addServiceToOauthAccount(
+  db: DB,
+  accountId: string,
+  templateId: string,
+  expiresAt?: number | null
+): Promise<schema.OauthAccountService> {
+  const service: schema.InsertOauthAccountService = {
+    id: nanoid(),
+    accountId,
+    templateId,
+    expiresAt: expiresAt ?? null,
+    createdAt: now(),
+  }
+  await db.insert(schema.oauthAccountServices).values(service)
+  return service as schema.OauthAccountService
+}
+
+// 绑定临时自定义服务（不写入全局模板）
+export async function addCustomServiceToOauthAccount(
+  db: DB,
+  accountId: string,
+  data: { name: string; loginUrl: string; note?: string | null; expiresAt?: number | null }
+): Promise<schema.OauthAccountService> {
+  const service: schema.InsertOauthAccountService = {
+    id: nanoid(),
+    accountId,
+    templateId: null,
+    customName: data.name,
+    customLoginUrl: data.loginUrl,
+    customNote: data.note ?? null,
+    expiresAt: data.expiresAt ?? null,
+    createdAt: now(),
+  }
+  await db.insert(schema.oauthAccountServices).values(service)
+  return service as schema.OauthAccountService
+}
+
+export async function getOauthAccountServicesWithDetails(
+  db: DB,
+  accountId: string
+): Promise<OauthAccountServiceDetails[]> {
+  const servicesMap = await getOauthAccountServicesMap(db, [accountId])
+  return servicesMap[accountId] ?? []
+}
+
+// 批量查询（列表页用：1 次 services 查询 + 至多 1 次 templates 查询）
+export async function getOauthAccountServicesMap(
+  db: DB,
+  accountIds: string[]
+): Promise<OauthAccountServicesMap> {
+  const uniqueAccountIds = [...new Set(accountIds)]
+  if (uniqueAccountIds.length === 0) return {}
+
+  const allServices = (await Promise.all(
+    uniqueChunks(uniqueAccountIds).map((chunk) =>
+      db.select()
+        .from(schema.oauthAccountServices)
+        .where(inArray(schema.oauthAccountServices.accountId, chunk))
+        .all()
+    )
+  )).flat()
+
+  const templateIds = allServices
+    .filter((s) => s.templateId)
+    .map((s) => s.templateId as string)
+  const uniqueTemplateIds = [...new Set(templateIds)]
+
+  const templates = uniqueTemplateIds.length > 0
+    ? (await Promise.all(
+        uniqueChunks(uniqueTemplateIds).map((chunk) =>
+          db.select()
+            .from(schema.serviceTemplates)
+            .where(inArray(schema.serviceTemplates.id, chunk))
+            .all()
+        )
+      )).flat()
+    : []
+
+  const templateMap = new Map(templates.map((t) => [t.id, t]))
+  const result: OauthAccountServicesMap = {}
+  for (const id of uniqueAccountIds) {
+    result[id] = []
+  }
+
+  for (const service of allServices) {
+    if (service.templateId) {
+      const template = templateMap.get(service.templateId)
+      if (template) {
+        result[service.accountId].push({
+          id: service.id,
+          name: template.name,
+          loginUrl: template.loginUrl,
+          note: template.note,
+          isCustom: false,
+          templateId: template.id,
+          expiresAt: service.expiresAt,
+        })
+      } else {
+        // 模板已被删除，显示占位符
+        result[service.accountId].push({
+          id: service.id,
+          name: "未知服务",
+          loginUrl: "",
+          note: "该服务模板已被删除",
+          isCustom: false,
+          templateId: service.templateId,
+          expiresAt: service.expiresAt,
+        })
+      }
+    } else {
+      result[service.accountId].push({
+        id: service.id,
+        name: service.customName || "未命名服务",
+        loginUrl: service.customLoginUrl || "",
+        note: service.customNote,
+        isCustom: true,
+        templateId: null,
+        expiresAt: service.expiresAt,
+      })
+    }
+  }
+
+  return result
+}
+
+export async function removeServiceFromOauthAccount(db: DB, serviceId: string): Promise<void> {
+  await db.delete(schema.oauthAccountServices).where(eq(schema.oauthAccountServices.id, serviceId))
+}
+
+export async function updateOauthAccountServiceExpiration(
+  db: DB,
+  serviceId: string,
+  expiresAt: number | null
+): Promise<void> {
+  await db
+    .update(schema.oauthAccountServices)
+    .set({ expiresAt })
+    .where(eq(schema.oauthAccountServices.id, serviceId))
 }

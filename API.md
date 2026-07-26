@@ -528,7 +528,8 @@ email----client_id----refresh_token
 ### 列出账号
 
 **端点：** `GET /api/v1/admin/oauth-accounts`  
-响应不含 refresh_token。
+**查询参数：** `limit`（默认 50，最大 200）、`offset`  
+响应不含 refresh_token，含 `services`（绑定服务）与 `total` / `limit` / `offset`。
 
 ### 删除 / 轮换分享令牌
 
@@ -546,12 +547,42 @@ email----client_id----refresh_token
 - Cookie `oauth_token`（分享链接登录后）
 
 **查询参数：** `folder`（`inbox`|`junkemail`|`all`）、`top`、`skip`  
-`folder=all` 时并行拉收件箱+垃圾箱并按时间合并。
+`folder=all` 时并行拉收件箱+垃圾箱并按时间合并，`skip` 在合并后的结果上生效。
+
+响应 `data` 含 `services`（该账号绑定的服务，见「绑定服务」）：
+
+```json
+{
+  "success": true,
+  "data": {
+    "email": "user@outlook.com",
+    "folder": "inbox",
+    "services": [
+      { "id": "...", "name": "GitHub", "loginUrl": "https://github.com/login", "note": null, "isCustom": false, "templateId": "...", "expiresAt": null }
+    ],
+    "emails": [ /* ... */ ]
+  }
+}
+```
 
 ### 邮件详情
 
 **端点：** `GET /api/v1/oauth/emails/:messageId`  
-认证同上。
+认证同上。`services` 作为 `data` 的同级字段返回（`data` 仍是邮件本身，保持兼容）。
+
+### 绑定服务
+
+OAuth 账号与临时邮箱一样可以绑定服务，服务列表复用全局「服务管理」模板（`service_templates`），也支持仅本账号的自定义服务，均可设置到期时间。
+
+- 管理入口：后台「OAuth 邮箱」每个账号卡片上的「绑定服务」
+- 展示位置：分享收件箱（`/?oauth_key=…`）的**邮件列表页与邮件详情页**都会显示绑定服务，过期的单独灰显
+- 读接口：上面两个邮件接口的 `services` 字段；`GET /api/v1/admin/oauth-accounts` 每个账号也带 `services`
+
+数据库迁移：
+
+```bash
+pnpm --filter web exec wrangler d1 execute xmail-db --remote --file=../../packages/database/migrations/0003_oauth_account_services.sql
+```
 
 ### 附件
 

@@ -1,5 +1,5 @@
 import type { APIRoute } from "astro"
-import { createDB } from "database"
+import { createDB, getOauthAccountServicesWithDetails } from "database"
 import { resolveOauthAccount, requireEncryptionKey } from "../../../../../lib/oauth-auth"
 import { listMessages, withAccountToken } from "../../../../../lib/ms-graph"
 
@@ -17,16 +17,20 @@ export const GET: APIRoute = async (context) => {
   const skip = parseInt(url.searchParams.get("skip") || "0", 10)
   const db = createDB(context.locals.runtime.env.DB)
 
-  const result = await withAccountToken(
-    db,
-    resolved.account,
-    encryptionKey!,
-    async (accessToken) => {
-      const listed = await listMessages(accessToken, { folder, top, skip })
-      if (!listed.success) throw new Error(listed.error)
-      return listed.emails
-    }
-  )
+  // 服务绑定与 Graph 拉信并行，不额外增加延迟
+  const [result, services] = await Promise.all([
+    withAccountToken(
+      db,
+      resolved.account,
+      encryptionKey!,
+      async (accessToken) => {
+        const listed = await listMessages(accessToken, { folder, top, skip })
+        if (!listed.success) throw new Error(listed.error)
+        return listed.emails
+      }
+    ),
+    getOauthAccountServicesWithDetails(db, resolved.account.id).catch(() => []),
+  ])
 
   if (!result.success) {
     return new Response(
@@ -48,6 +52,7 @@ export const GET: APIRoute = async (context) => {
       data: {
         email: resolved.account.email,
         folder,
+        services,
         emails: result.data,
       },
     }),

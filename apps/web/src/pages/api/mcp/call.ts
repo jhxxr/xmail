@@ -284,7 +284,7 @@ export const POST: APIRoute = async (context) => {
         result = await handleImportOauthAccounts(db, args, encryptionKey)
         break
       case "list_oauth_accounts":
-        result = await handleListOauthAccounts(db)
+        result = await handleListOauthAccounts(db, args)
         break
       case "get_oauth_verification_code":
         result = await handleGetOauthVerificationCode(db, args, encryptionKey)
@@ -424,19 +424,22 @@ async function handleGetVerificationCode(db: any, args: any, encryptionKey?: str
   }, encryptionKey)
 }
 
-function publicOauthAccount(account: {
-  id: string
-  email: string
-  provider: string
-  clientId: string
-  shareToken: string
-  note: string | null
-  status: string
-  lastError: string | null
-  lastSyncAt: number | null
-  createdAt: number
-  updatedAt: number
-}) {
+function publicOauthAccount(
+  account: {
+    id: string
+    email: string
+    provider: string
+    clientId: string
+    shareToken: string
+    note: string | null
+    status: string
+    lastError: string | null
+    lastSyncAt: number | null
+    createdAt: number
+    updatedAt: number
+  },
+  services: dao.OauthAccountServiceDetails[] = []
+) {
   return {
     id: account.id,
     email: account.email,
@@ -449,6 +452,15 @@ function publicOauthAccount(account: {
     last_sync_at: account.lastSyncAt,
     created_at: account.createdAt,
     updated_at: account.updatedAt,
+    services: services.map((s) => ({
+      id: s.id,
+      name: s.name,
+      login_url: s.loginUrl,
+      note: s.note,
+      is_custom: s.isCustom,
+      template_id: s.templateId,
+      expires_at: s.expiresAt,
+    })),
   }
 }
 
@@ -511,19 +523,30 @@ async function handleImportOauthAccounts(db: any, args: any, encryptionKey?: str
   // 导入不测活，避免批量打微软 token 接口 / 触发 Worker 限制
   return {
     success: true,
-    added: result.added.map(publicOauthAccount),
-    updated: result.updated.map(publicOauthAccount),
+    added: result.added.map((a: any) => publicOauthAccount(a)),
+    updated: result.updated.map((a: any) => publicOauthAccount(a)),
     skipped: result.skipped,
     parse_errors: parsed.errors,
   }
 }
 
-async function handleListOauthAccounts(db: any) {
-  const accounts = await dao.listOauthMailAccounts(db)
+async function handleListOauthAccounts(db: any, args: any = {}) {
+  const limit = Math.min(Math.max(Number(args.limit) || 50, 1), 200)
+  const offset = Math.max(Number(args.offset) || 0, 0)
+  const [accounts, total] = await Promise.all([
+    dao.listOauthMailAccounts(db, { limit, offset }),
+    dao.countOauthMailAccounts(db),
+  ])
+  const servicesMap = await dao
+    .getOauthAccountServicesMap(db, accounts.map((a: any) => a.id))
+    .catch(() => ({} as dao.OauthAccountServicesMap))
   return {
     success: true,
     count: accounts.length,
-    accounts: accounts.map(publicOauthAccount),
+    total,
+    limit,
+    offset,
+    accounts: accounts.map((a: any) => publicOauthAccount(a, servicesMap[a.id] || [])),
   }
 }
 
@@ -663,9 +686,14 @@ async function handleProbeOauthAccount(db: any, args: any, encryptionKey?: strin
     throw new Error("ENCRYPTION_KEY not configured")
   }
   if (args.all) {
-    const accounts = await dao.listOauthMailAccounts(db)
+    // 每个账号测活最多约 20 个 Graph 子请求，必须封顶避免超出 Workers 上限
+    const limit = Math.min(Math.max(Number(args.limit) || 20, 1), 50)
+    const [accounts, total] = await Promise.all([
+      dao.listOauthMailAccounts(db, { limit }),
+      dao.countOauthMailAccounts(db),
+    ])
     const probe = await probeStoredAccountsBatch(db, accounts, encryptionKey!, 3)
-    return { success: true, ...probe }
+    return { success: true, ...probe, probed: accounts.length, total }
   }
   const account = await resolveOauthAccountFromArgs(db, args)
   if (!account) throw new Error("OAuth account not found")

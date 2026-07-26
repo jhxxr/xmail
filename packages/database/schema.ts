@@ -234,6 +234,26 @@ export const oauthMailAccounts = sqliteTable("oauth_mail_accounts", {
   statusIdx: index("idx_oauth_mail_accounts_status").on(t.status),
 }))
 
+// OAuth 收信账号服务关联表（与 mailboxServices 同构，含到期时间）
+export const oauthAccountServices = sqliteTable("oauth_account_services", {
+  id: text("id").primaryKey(),
+  accountId: text("account_id").notNull().references(() => oauthMailAccounts.id, { onDelete: "cascade" }),
+
+  // 方式1: 引用全局服务模板
+  templateId: text("template_id").references(() => serviceTemplates.id, { onDelete: "cascade" }),
+
+  // 方式2: 临时自定义服务 (templateId 为 null 时使用)
+  customName: text("custom_name"),
+  customLoginUrl: text("custom_login_url"),
+  customNote: text("custom_note"),
+
+  expiresAt: integer("expires_at"), // 服务到期时间（Unix 秒）
+
+  createdAt: integer("created_at").notNull(),
+}, (t) => ({
+  accountIdx: index("idx_oauth_account_services_account").on(t.accountId),
+}))
+
 // 类型导出
 export type Admin = typeof admins.$inferSelect
 export type InsertAdmin = typeof admins.$inferInsert
@@ -267,3 +287,5 @@ export type ApiKey = typeof apiKeys.$inferSelect
 export type InsertApiKey = typeof apiKeys.$inferInsert
 export type OauthMailAccount = typeof oauthMailAccounts.$inferSelect
 export type InsertOauthMailAccount = typeof oauthMailAccounts.$inferInsert
+export type OauthAccountService = typeof oauthAccountServices.$inferSelect
+export type InsertOauthAccountService = typeof oauthAccountServices.$inferInsert

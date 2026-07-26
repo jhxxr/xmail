@@ -530,7 +530,7 @@ Claude 会依次调用：
 ### OAuth 邮箱（Microsoft Graph）
 
 - `import_oauth_accounts` - 批量导入/更新 Outlook OAuth 账号（`email----client_id----refresh_token`）
-- `list_oauth_accounts` - 列出 OAuth 账号与分享令牌
+- `list_oauth_accounts` - 列出 OAuth 账号与分享令牌（分页，含绑定服务）
 - `get_oauth_verification_code` - 实时拉信并提取验证码（email / share_token / account_id）
 - `list_oauth_emails` - 实时列出收件箱/垃圾邮件
 - `delete_oauth_account` - 删除 OAuth 账号

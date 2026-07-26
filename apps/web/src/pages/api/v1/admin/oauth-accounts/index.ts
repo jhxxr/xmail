@@ -1,10 +1,13 @@
 import type { APIRoute } from "astro"
 import {
   createDB,
+  countOauthMailAccounts,
   createOauthMailAccountsBulk,
   getAdminById,
+  getOauthAccountServicesMap,
   listOauthMailAccounts,
   createLog,
+  type OauthAccountServiceDetails,
 } from "database"
 import { authenticateApiKey, unauthorizedResponse } from "../../../../../lib/api-auth"
 import { verifyToken } from "../../../../../lib/auth"
@@ -33,19 +36,22 @@ async function requireAdminOrApiKey(context: Parameters<APIRoute>[0]): Promise<
   return { ok: true, adminId: admin.id }
 }
 
-function publicAccount(account: {
-  id: string
-  email: string
-  provider: string
-  clientId: string
-  shareToken: string
-  note: string | null
-  status: string
-  lastError: string | null
-  lastSyncAt: number | null
-  createdAt: number
-  updatedAt: number
-}) {
+function publicAccount(
+  account: {
+    id: string
+    email: string
+    provider: string
+    clientId: string
+    shareToken: string
+    note: string | null
+    status: string
+    lastError: string | null
+    lastSyncAt: number | null
+    createdAt: number
+    updatedAt: number
+  },
+  services: OauthAccountServiceDetails[] = []
+) {
   return {
     id: account.id,
     email: account.email,
@@ -58,6 +64,7 @@ function publicAccount(account: {
     lastSyncAt: account.lastSyncAt,
     createdAt: account.createdAt,
     updatedAt: account.updatedAt,
+    services,
   }
 }
 
@@ -66,11 +73,25 @@ export const GET: APIRoute = async (context) => {
   if (!auth.ok) return auth.response
 
   const db = createDB(context.locals.runtime.env.DB)
-  const accounts = await listOauthMailAccounts(db)
+  const url = new URL(context.request.url)
+  const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") || "50", 10) || 50, 1), 200)
+  const offset = Math.max(parseInt(url.searchParams.get("offset") || "0", 10) || 0, 0)
+
+  const [accounts, total] = await Promise.all([
+    listOauthMailAccounts(db, { limit, offset }),
+    countOauthMailAccounts(db),
+  ])
+  const servicesMap = await getOauthAccountServicesMap(db, accounts.map((a) => a.id)).catch(
+    () => ({}) as Record<string, OauthAccountServiceDetails[]>
+  )
+
   return new Response(
     JSON.stringify({
       success: true,
-      data: accounts.map(publicAccount),
+      total,
+      limit,
+      offset,
+      data: accounts.map((a) => publicAccount(a, servicesMap[a.id] || [])),
     }),
     { status: 200, headers: { "Content-Type": "application/json" } }
   )
@@ -171,8 +192,8 @@ export const POST: APIRoute = async (context) => {
     JSON.stringify({
       success: true,
       data: {
-        added: result.added.map(publicAccount),
-        updated: result.updated.map(publicAccount),
+        added: result.added.map((a) => publicAccount(a)),
+        updated: result.updated.map((a) => publicAccount(a)),
         skipped: result.skipped,
         parse_errors: parsed.errors,
       },

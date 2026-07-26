@@ -3,12 +3,20 @@ import AdminLayout from "../../layouts/AdminLayout.astro"
 import {
   createDB,
   listOauthMailAccounts,
+  countOauthMailAccounts,
   createOauthMailAccountsBulk,
   deleteOauthMailAccount,
+  getOauthMailAccount,
   regenerateOauthShareToken,
   getAdminById,
   createLog,
   updateOauthMailAccount,
+  listServiceTemplates,
+  getOauthAccountServicesMap,
+  addServiceToOauthAccount,
+  addCustomServiceToOauthAccount,
+  removeServiceFromOauthAccount,
+  updateOauthAccountServiceExpiration,
 } from "database"
 import { verifyToken } from "../../lib/auth"
 import { encryptSecret, isEncryptionKeyConfigured } from "../../lib/crypto"
@@ -28,6 +36,17 @@ import { Button } from "../../components/ui/button"
 import { Input } from "../../components/ui/input"
 import { Badge } from "../../components/ui/badge"
 import { Mail, Trash2, Copy, RefreshCw, ExternalLink, KeyRound } from "lucide-react"
+import { OauthServiceManager } from "../../components/admin/OauthServiceManager"
+
+const PAGE_SIZE = 30
+// 每个账号测活最多约 20 个 Graph 子请求，Workers 单请求有上限，批量测活必须封顶
+const PROBE_ALL_MAX = 20
+
+function parseExpiresAt(value: FormDataEntryValue | null): number | null {
+  if (!value) return null
+  const ts = Math.floor(new Date(value.toString()).getTime() / 1000)
+  return Number.isFinite(ts) && ts > 0 ? ts : null
+}
 
 const db = createDB(Astro.locals.runtime.env.DB)
 const jwtSecret = Astro.locals.runtime.env.JWT_SECRET
@@ -108,7 +127,7 @@ if (Astro.request.method === "POST") {
         message = "ENCRYPTION_KEY 未配置，无法解密 refresh_token"
         messageType = "error"
       } else {
-        const account = (await listOauthMailAccounts(db)).find((a) => a.id === id)
+        const account = await getOauthMailAccount(db, id)
         if (!account) {
           message = "账号不存在"
           messageType = "error"
@@ -134,10 +153,14 @@ if (Astro.request.method === "POST") {
         message = "ENCRYPTION_KEY 未配置，无法批量测活"
         messageType = "error"
       } else {
-        const all = await listOauthMailAccounts(db)
+        const all = await listOauthMailAccounts(db, { limit: PROBE_ALL_MAX })
+        const total = await countOauthMailAccounts(db)
         // 串行/低并发，避免触发 Worker 与微软限流
         const probe = await probeStoredAccountsBatch(db, all, encryptionKey!, 1)
-        message = `批量测活完成：成功 ${probe.ok}，失败 ${probe.failed}（大批量请分批手动测）`
+        message = `批量测活完成：成功 ${probe.ok}，失败 ${probe.failed}`
+        if (total > all.length) {
+          message += `（本次只测了最近 ${all.length} / ${total} 个，避免超出 Worker 子请求上限）`
+        }
         if (probe.errors.length) {
           message += `；示例: ${probe.errors[0].email} ${probe.errors[0].error}`
         }
@@ -152,7 +175,7 @@ if (Astro.request.method === "POST") {
         message = "ENCRYPTION_KEY 未配置，无法刷新 refresh_token"
         messageType = "error"
       } else {
-        const account = (await listOauthMailAccounts(db)).find((a) => a.id === id)
+        const account = await getOauthMailAccount(db, id)
         if (!account) {
           message = "账号不存在"
           messageType = "error"
@@ -179,8 +202,7 @@ if (Astro.request.method === "POST") {
     } else if (action === "delete") {
       const id = formData.get("id")?.toString()
       if (id) {
-        const accounts = await listOauthMailAccounts(db)
-        const target = accounts.find((a) => a.id === id)
+        const target = await getOauthMailAccount(db, id)
         await deleteOauthMailAccount(db, id)
         invalidateAccessTokenCache(id)
         await createLog(db, {
@@ -213,6 +235,58 @@ if (Astro.request.method === "POST") {
         message = status === "active" ? "已启用" : "已停用"
         messageType = "success"
       }
+    } else if (action === "add_oauth_template_service") {
+      const targetId = formData.get("account_id")?.toString()
+      const templateId = formData.get("template_id")?.toString()
+      const expiresAt = parseExpiresAt(formData.get("expires_at"))
+      if (targetId && templateId) {
+        await addServiceToOauthAccount(db, targetId, templateId, expiresAt)
+        await createLog(db, {
+          adminId: admin.id,
+          action: "oauth_add_service",
+          target: targetId,
+          details: { templateId, expiresAt },
+        })
+        message = "服务已关联"
+        messageType = "success"
+      }
+    } else if (action === "add_oauth_custom_service") {
+      const targetId = formData.get("account_id")?.toString()
+      const name = formData.get("service_name")?.toString()?.trim()
+      const loginUrl = formData.get("service_login_url")?.toString()?.trim()
+      const note = formData.get("service_note")?.toString()?.trim()
+      const expiresAt = parseExpiresAt(formData.get("expires_at"))
+      if (targetId && name && loginUrl) {
+        await addCustomServiceToOauthAccount(db, targetId, {
+          name,
+          loginUrl,
+          note: note || null,
+          expiresAt,
+        })
+        await createLog(db, {
+          adminId: admin.id,
+          action: "oauth_add_custom_service",
+          target: targetId,
+          details: { name, loginUrl, expiresAt },
+        })
+        message = `临时服务 ${name} 已添加`
+        messageType = "success"
+      }
+    } else if (action === "delete_oauth_service") {
+      const serviceId = formData.get("service_id")?.toString()
+      if (serviceId) {
+        await removeServiceFromOauthAccount(db, serviceId)
+        message = "服务已删除"
+        messageType = "success"
+      }
+    } else if (action === "update_oauth_service_expiration") {
+      const serviceId = formData.get("service_id")?.toString()
+      const expiresAt = parseExpiresAt(formData.get("expires_at"))
+      if (serviceId) {
+        await updateOauthAccountServiceExpiration(db, serviceId, expiresAt)
+        message = "到期时间已更新"
+        messageType = "success"
+      }
     }
   } catch (e) {
     message = e instanceof Error ? e.message : "操作失败"
@@ -220,9 +294,24 @@ if (Astro.request.method === "POST") {
   }
 }
 
+const page = Math.max(1, parseInt(Astro.url.searchParams.get("page") || "1") || 1)
+const offset = (page - 1) * PAGE_SIZE
+
 let accounts: Awaited<ReturnType<typeof listOauthMailAccounts>> = []
+let totalAccounts = 0
+let serviceTemplates: Awaited<ReturnType<typeof listServiceTemplates>> = []
+let servicesMap: Awaited<ReturnType<typeof getOauthAccountServicesMap>> = {}
 try {
-  accounts = await listOauthMailAccounts(db)
+  ;[accounts, totalAccounts, serviceTemplates] = await Promise.all([
+    listOauthMailAccounts(db, { limit: PAGE_SIZE, offset }),
+    countOauthMailAccounts(db),
+    listServiceTemplates(db),
+  ])
+  try {
+    servicesMap = await getOauthAccountServicesMap(db, accounts.map((a) => a.id))
+  } catch {
+    // 0003 迁移未执行时降级为「无绑定服务」，不阻断账号列表
+  }
 } catch (e) {
   const detail = e instanceof Error ? e.message : String(e)
   // Common when migration 0002_oauth_mail_accounts.sql was never applied to D1
@@ -234,6 +323,7 @@ try {
   }
   messageType = "error"
 }
+const totalPages = Math.max(1, Math.ceil(totalAccounts / PAGE_SIZE))
 const origin = Astro.url.origin
 const encryptionReady = isEncryptionKeyConfigured(encryptionKey)
 const msClientConfigured = Boolean(Astro.locals.runtime.env.MS_CLIENT_ID)
@@ -328,7 +418,10 @@ function describeRtAge(ageSec: number | null): { label: string; stale: boolean }
 
     <Card>
       <CardHeader class="flex flex-row items-center justify-between space-y-0">
-        <CardTitle className="text-base">账号列表（{accounts.length}）</CardTitle>
+        <CardTitle className="text-base">
+          账号列表（{totalAccounts}）
+          {totalPages > 1 ? ` · 第 ${page} / ${totalPages} 页` : ""}
+        </CardTitle>
         {accounts.length > 0 && encryptionReady && (
           <form method="POST">
             <input type="hidden" name="action" value="probe_all" />
@@ -433,6 +526,16 @@ function describeRtAge(ageSec: number | null): { label: string; stale: boolean }
                   </div>
                 </div>
 
+                <div class="border-t pt-3">
+                  <OauthServiceManager
+                    client:visible
+                    accountId={account.id}
+                    accountLabel={account.email}
+                    initialServices={servicesMap[account.id] || []}
+                    templates={serviceTemplates}
+                  />
+                </div>
+
                 <div class="bg-muted/40 rounded-md p-3 space-y-2 text-sm">
                   <div class="flex items-center gap-2 flex-wrap">
                     <KeyRound className="w-3.5 h-3.5 text-muted-foreground" />
@@ -473,6 +576,25 @@ function describeRtAge(ageSec: number | null): { label: string; stale: boolean }
               </div>
             )
           })
+        )}
+
+        {totalPages > 1 && (
+          <div class="flex items-center justify-between border-t pt-3">
+            <p class="text-xs text-muted-foreground">
+              第 {page} / {totalPages} 页 · 共 {totalAccounts} 个账号
+            </p>
+            <div class="flex gap-2">
+              <a href={`/admin/oauth-accounts?page=${Math.max(1, page - 1)}`} class={page <= 1 ? "pointer-events-none" : ""}>
+                <Button size="sm" variant="outline" disabled={page <= 1}>上一页</Button>
+              </a>
+              <a
+                href={`/admin/oauth-accounts?page=${Math.min(totalPages, page + 1)}`}
+                class={page >= totalPages ? "pointer-events-none" : ""}
+              >
+                <Button size="sm" variant="outline" disabled={page >= totalPages}>下一页</Button>
+              </a>
+            </div>
+          </div>
         )}
       </CardContent>
     </Card>

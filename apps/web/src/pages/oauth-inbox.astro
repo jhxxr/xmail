@@ -4,15 +4,17 @@ import {
   createDB,
   getOauthMailAccount,
   getOauthMailAccountByShareToken,
+  getOauthAccountServicesWithDetails,
 } from "database"
 import { verifyToken, generateOauthAccountToken } from "../lib/auth"
 import { isEncryptionKeyConfigured } from "../lib/crypto"
 import { extractVerificationCode, formatDate, extractPreview } from "../lib/utils"
-import { listMessages, getMessage, listAttachments, withAccountToken } from "../lib/ms-graph"
+import { listMessages, getMessage, withAccountToken } from "../lib/ms-graph"
 import { sanitizeEmailHtml } from "../lib/email-html"
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
 import { Button } from "../components/ui/button"
 import { Badge } from "../components/ui/badge"
+import { ServiceList } from "../components/inbox/ServiceList"
 import { Mail, RefreshCw, LogOut, Inbox, AlertTriangle } from "lucide-react"
 
 const db = createDB(Astro.locals.runtime.env.DB)
@@ -96,6 +98,17 @@ if (account.status === "disabled") {
   error = "该账号已停用"
 }
 
+// 绑定服务（账号级：列表页与详情页都展示）
+let services: Awaited<ReturnType<typeof getOauthAccountServicesWithDetails>> = []
+try {
+  services = await getOauthAccountServicesWithDetails(db, account.id)
+} catch {
+  // 0003 迁移未执行时降级为「无服务」，不阻断收信
+}
+const nowSec = Math.floor(Date.now() / 1000)
+const activeServices = services.filter((s) => !s.expiresAt || s.expiresAt > nowSec)
+const expiredServices = services.filter((s) => s.expiresAt && s.expiresAt <= nowSec)
+
 type ListItem = {
   id: string
   subject: string | null
@@ -129,21 +142,19 @@ let detail: DetailItem | null = null
 if (!error && isEncryptionKeyConfigured(encryptionKey) && account.status !== "disabled") {
   if (messageId) {
     const result = await withAccountToken(db, account, encryptionKey!, async (accessToken) => {
-      const msg = await getMessage(accessToken, messageId, { preferHtml: true })
+      // 正文 + 附件元数据一次 Graph 请求拿全（$expand），省掉一次往返
+      const msg = await getMessage(accessToken, messageId, {
+        preferHtml: true,
+        expandAttachments: true,
+      })
       if (!msg.success) throw new Error(msg.error)
-      let attachments: DetailItem["attachments"] = []
-      if (msg.email.hasAttachments) {
-        const listed = await listAttachments(accessToken, messageId)
-        if (listed.success) {
-          attachments = listed.attachments.map((a) => ({
-            id: a.id,
-            name: a.name,
-            contentType: a.contentType,
-            size: a.size,
-            isInline: a.isInline,
-          }))
-        }
-      }
+      const attachments: DetailItem["attachments"] = (msg.email.attachments || []).map((a) => ({
+        id: a.id,
+        name: a.name,
+        contentType: a.contentType,
+        size: a.size,
+        isInline: a.isInline,
+      }))
       return { email: msg.email, attachments }
     })
     if (result.success) {
@@ -218,6 +229,25 @@ function formatGraphDate(iso: string | null): string {
         </div>
       )}
 
+      {services.length > 0 && (
+        <div class="rounded-lg border bg-background/60 backdrop-blur-md px-4 py-3 space-y-2">
+          <ServiceList client:visible services={activeServices} isMobile={true} />
+          {expiredServices.length > 0 && (
+            <div class="flex flex-wrap items-center gap-1.5 pt-1">
+              <span class="text-[11px] text-muted-foreground">已过期</span>
+              {expiredServices.map((s) => (
+                <Badge
+                  variant="outline"
+                  className="text-[10px] line-through opacity-70 border-destructive/50 text-destructive"
+                >
+                  {s.name}
+                </Badge>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {!messageId && (
         <div class="flex gap-2 flex-wrap">
           <a href={`/oauth-inbox?account=${account.id}&folder=all`}>
@@ -260,6 +290,18 @@ function formatGraphDate(iso: string | null): string {
               {detail.fromName ? ` <${detail.fromAddress}>` : ""}
               · {formatGraphDate(detail.receivedAt)}
             </div>
+            {activeServices.length > 0 && (
+              <div class="flex flex-wrap items-center gap-1.5">
+                <span class="text-xs text-muted-foreground">绑定服务</span>
+                {activeServices.map((s) => (
+                  <a href={s.loginUrl || "#"} target="_blank" rel="noreferrer" class="no-underline">
+                    <Badge variant="outline" className="text-[10px] hover:bg-accent transition-colors">
+                      {s.name}
+                    </Badge>
+                  </a>
+                ))}
+              </div>
+            )}
             {detail.code && (
               <div class="rounded-md bg-primary/10 border border-primary/20 px-3 py-2 text-sm">
                 验证码：
@@ -303,11 +345,23 @@ function formatGraphDate(iso: string | null): string {
         </Card>
       ) : (
         <Card>
-          <CardHeader>
+          <CardHeader class="space-y-2">
             <CardTitle className="text-base flex items-center gap-2">
               <Mail className="w-4 h-4" />
               邮件列表
             </CardTitle>
+            {activeServices.length > 0 && (
+              <div class="flex flex-wrap items-center gap-1.5">
+                <span class="text-xs text-muted-foreground">绑定服务</span>
+                {activeServices.map((s) => (
+                  <a href={s.loginUrl || "#"} target="_blank" rel="noreferrer" class="no-underline">
+                    <Badge variant="outline" className="text-[10px] hover:bg-accent transition-colors">
+                      {s.name}
+                    </Badge>
+                  </a>
+                ))}
+              </div>
+            )}
           </CardHeader>
           <CardContent class="p-0">
             {emails.length === 0 && !error ? (
