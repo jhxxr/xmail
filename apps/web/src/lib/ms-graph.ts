@@ -117,6 +117,8 @@ export type GraphMessageDetail = GraphMessageSummary & {
   html: string | null
   toAddresses: string[]
   ccAddresses: string[]
+  /** Present only when fetched with expandAttachments. */
+  attachments?: GraphAttachmentMeta[]
 }
 
 export type GraphAttachmentMeta = {
@@ -389,7 +391,6 @@ export async function probeGraphCredentials(
       success: true
       accessToken: string
       refreshToken?: string
-      emailHint?: string
       tokenKind: "graph" | "imap" | "unknown"
       graphMailOk: boolean
       warning?: string
@@ -461,28 +462,11 @@ export async function probeGraphCredentials(
           skip: 0,
         })
         if (listed.success) {
-          let emailHint: string | undefined
-          try {
-            const meRes = await fetch(`${GRAPH_BASE}/me?$select=mail,userPrincipalName`, {
-              headers: { Authorization: `Bearer ${data.access_token}` },
-            })
-            if (meRes.ok) {
-              const me = (await meRes.json()) as {
-                mail?: string
-                userPrincipalName?: string
-              }
-              emailHint =
-                (me.mail || me.userPrincipalName || "").toLowerCase() || undefined
-            }
-          } catch {
-            // optional
-          }
           return {
             success: true,
             accessToken: data.access_token,
             refreshToken:
               typeof data.refresh_token === "string" ? data.refresh_token : undefined,
-            emailHint,
             tokenKind: "graph",
             graphMailOk: true,
             attemptLabel: attempt.label,
@@ -720,6 +704,19 @@ function toGraphIso(ms: number): string {
   return new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z")
 }
 
+function mapAttachments(items: Record<string, unknown>[] | undefined): GraphAttachmentMeta[] {
+  return (items || [])
+    .map((item, index) => ({
+      id: String(item.id || ""),
+      name: String(item.name || `attachment-${index + 1}`),
+      contentType: String(item.contentType || "application/octet-stream"),
+      size: Number(item.size || 0),
+      isInline: Boolean(item.isInline),
+      contentId: item.contentId ? String(item.contentId).replace(/^<|>$/g, "") : null,
+    }))
+    .filter((a) => a.id)
+}
+
 function recipientAddresses(
   list: Array<{ emailAddress?: { address?: string } }> | undefined
 ): string[] {
@@ -797,7 +794,10 @@ export async function listMessages(
 
   // folder=all → inbox + junkemail in parallel, merge by receivedAt
   if (folderKey === "all" || folderKey === "inbox+junk" || folderKey === "both") {
-    const perFolderTop = Math.min(Math.max(options.top ?? 20, 1), 50)
+    const top = Math.min(Math.max(options.top ?? 20, 1), 50)
+    const skip = Math.max(options.skip ?? 0, 0)
+    // 合并分页：每个文件夹都要覆盖到 skip+top，否则跨文件夹排序后会漏信
+    const perFolderTop = Math.min(skip + top, 50)
     const [inbox, junk] = await Promise.all([
       listMessagesSingleFolder(accessToken, "inbox", { ...options, top: perFolderTop, skip: 0 }),
       listMessagesSingleFolder(accessToken, "junkemail", {
@@ -823,7 +823,7 @@ export async function listMessages(
       const tb = b.receivedAt ? Date.parse(b.receivedAt) : 0
       return tb - ta
     })
-    return { success: true, emails: emails.slice(0, perFolderTop) }
+    return { success: true, emails: emails.slice(skip, skip + top) }
   }
 
   return listMessagesSingleFolder(accessToken, mapFolder(folderKey), options)
@@ -832,11 +832,15 @@ export async function listMessages(
 export async function getMessage(
   accessToken: string,
   messageId: string,
-  options: { preferHtml?: boolean } = {}
+  options: { preferHtml?: boolean; expandAttachments?: boolean } = {}
 ): Promise<{ success: true; email: GraphMessageDetail } | { success: false; error: string }> {
   const select =
     "id,subject,from,toRecipients,ccRecipients,receivedDateTime,isRead,hasAttachments,bodyPreview,body"
-  const url = `${GRAPH_BASE}/me/messages/${encodeURIComponent(messageId)}?$select=${select}`
+  // $expand 让附件元数据随正文一起返回，省掉一次 Graph 往返
+  const expand = options.expandAttachments
+    ? "&$expand=attachments($select=id,name,contentType,size,isInline,contentId)"
+    : ""
+  const url = `${GRAPH_BASE}/me/messages/${encodeURIComponent(messageId)}?$select=${select}${expand}`
   const prefer = options.preferHtml
     ? 'outlook.body-content-type="html"'
     : 'outlook.body-content-type="text"'
@@ -877,6 +881,9 @@ export async function getMessage(
         ccAddresses: recipientAddresses(
           msg.ccRecipients as Array<{ emailAddress?: { address?: string } }>
         ),
+        ...(options.expandAttachments
+          ? { attachments: mapAttachments(msg.attachments as Record<string, unknown>[] | undefined) }
+          : {}),
       },
     }
   } catch (e) {
@@ -944,14 +951,7 @@ export async function listAttachments(
       }
     }
     const data = (await res.json()) as { value?: Record<string, unknown>[] }
-    const attachments: GraphAttachmentMeta[] = (data.value || []).map((item, index) => ({
-      id: String(item.id || ""),
-      name: String(item.name || `attachment-${index + 1}`),
-      contentType: String(item.contentType || "application/octet-stream"),
-      size: Number(item.size || 0),
-      isInline: Boolean(item.isInline),
-      contentId: item.contentId ? String(item.contentId).replace(/^<|>$/g, "") : null,
-    })).filter((a) => a.id)
+    const attachments = mapAttachments(data.value)
     return { success: true, attachments }
   } catch (e) {
     return {

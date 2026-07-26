@@ -27,18 +27,35 @@ function fromBase64Url(value: string): Uint8Array<ArrayBuffer> {
   return bytes
 }
 
+// 每个 isolate 内 ENCRYPTION_KEY 不变，缓存派生结果。
+// 批量导入时每个账号要加密 2 个字段，重复派生会白烧 Worker CPU。
+const derivedKeyCache = new Map<string, Promise<CryptoKey>>()
+
 async function deriveAesKey(encryptionKey: string): Promise<CryptoKey> {
   if (!encryptionKey || encryptionKey === "default-key-please-change") {
     throw new Error("ENCRYPTION_KEY is required for OAuth secrets")
   }
-  const material = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(encryptionKey)
-  )
-  return crypto.subtle.importKey("raw", material, { name: "AES-GCM" }, false, [
-    "encrypt",
-    "decrypt",
-  ])
+  const cached = derivedKeyCache.get(encryptionKey)
+  if (cached) return cached
+
+  const pending = (async () => {
+    const material = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(encryptionKey)
+    )
+    return crypto.subtle.importKey("raw", material, { name: "AES-GCM" }, false, [
+      "encrypt",
+      "decrypt",
+    ])
+  })()
+
+  derivedKeyCache.set(encryptionKey, pending)
+  try {
+    return await pending
+  } catch (e) {
+    derivedKeyCache.delete(encryptionKey)
+    throw e
+  }
 }
 
 export async function encryptSecret(plaintext: string, encryptionKey: string): Promise<string> {
