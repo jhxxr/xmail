@@ -122,18 +122,18 @@ const bootstrapJson = JSON.stringify({
 
       <div class="rounded-lg border bg-muted/30 p-3 space-y-3">
         <p class="text-xs font-medium text-muted-foreground">
-          当前邮箱用完后的处理（创建下一个时生效，二选一）
+          当前邮箱用完后的处理（创建下一个时生效，单选）
         </p>
         <div class="grid gap-2 sm:grid-cols-2">
           <label class="flex items-start gap-2 rounded-md border bg-background p-3 cursor-pointer hover:border-primary/50 has-[:checked]:border-primary has-[:checked]:bg-primary/5">
-            <input type="radio" data-wb-next-mode value="auto_delete" class="mt-1" checked />
+            <input type="radio" name="wb-next-mode" data-wb-next-mode value="auto_delete" class="mt-1 size-4 shrink-0 accent-primary" checked />
             <span>
               <span class="text-sm font-medium block">自动删除</span>
               <span class="text-xs text-muted-foreground">创建下一个时，删除当前临时邮箱</span>
             </span>
           </label>
           <label class="flex items-start gap-2 rounded-md border bg-background p-3 cursor-pointer hover:border-primary/50 has-[:checked]:border-primary has-[:checked]:bg-primary/5">
-            <input type="radio" data-wb-next-mode value="keep_with_services" class="mt-1" />
+            <input type="radio" name="wb-next-mode" data-wb-next-mode value="keep_with_services" class="mt-1 size-4 shrink-0 accent-primary" />
             <span>
               <span class="text-sm font-medium block">关联服务并保留</span>
               <span class="text-xs text-muted-foreground">创建下一个时不删当前邮箱，且给新邮箱绑定所选服务</span>
@@ -141,29 +141,36 @@ const bootstrapJson = JSON.stringify({
           </label>
         </div>
         <label class="inline-flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
-          <input type="radio" data-wb-next-mode value="none" />
+          <input type="radio" name="wb-next-mode" data-wb-next-mode value="none" class="size-4 shrink-0 accent-primary" />
           无特殊处理（仅创建新邮箱）
         </label>
 
         <div data-wb-service-panel class="hidden space-y-3 border-t pt-3">
           <div>
-            <p class="text-xs font-medium mb-2">选择已有服务模板</p>
-            <div data-wb-templates class="flex flex-wrap gap-2 text-sm"></div>
+            <div class="flex items-center justify-between gap-2 mb-2">
+              <p class="text-xs font-medium">绑定服务（来自「服务管理」模板）</p>
+              <a href="/admin/services" class="text-[11px] text-primary hover:underline" target="_blank" rel="noreferrer">管理服务 →</a>
+            </div>
+            <div data-wb-templates class="rounded-md border bg-background max-h-48 overflow-y-auto divide-y text-sm"></div>
           </div>
-          <div class="grid sm:grid-cols-3 gap-2">
-            <input data-wb-custom-name placeholder="新服务名称" class="h-9 rounded-md border border-input bg-background px-3 text-sm" />
-            <input data-wb-custom-url placeholder="登录 URL" class="h-9 rounded-md border border-input bg-background px-3 text-sm sm:col-span-2" />
+          <div class="rounded-md border bg-background p-3 space-y-2">
+            <p class="text-xs font-medium">新建关联服务（仅本次，可选保存为模板）</p>
+            <div class="grid sm:grid-cols-3 gap-2">
+              <input data-wb-custom-name placeholder="服务名称，如 GitHub" class="h-9 rounded-md border border-input bg-background px-3 text-sm" />
+              <input data-wb-custom-url placeholder="登录 URL，如 https://..." class="h-9 rounded-md border border-input bg-background px-3 text-sm sm:col-span-2" />
+            </div>
+            <div class="flex flex-wrap items-center gap-3">
+              <label class="inline-flex items-center gap-2 text-xs cursor-pointer">
+                <input type="checkbox" data-wb-save-template class="size-3.5 accent-primary" />
+                同时保存到「服务管理」
+              </label>
+              <button type="button" data-wb-add-custom class="text-xs h-8 px-3 rounded-full border hover:bg-accent">
+                添加到本次绑定
+              </button>
+            </div>
+            <div data-wb-custom-list class="flex flex-wrap gap-2 text-xs"></div>
           </div>
-          <div class="flex flex-wrap items-center gap-3">
-            <label class="inline-flex items-center gap-2 text-xs cursor-pointer">
-              <input type="checkbox" data-wb-save-template />
-              同时保存为全局服务模板
-            </label>
-            <button type="button" data-wb-add-custom class="text-xs h-8 px-3 rounded-full border hover:bg-accent">
-              添加到本次绑定
-            </button>
-          </div>
-          <div data-wb-custom-list class="flex flex-wrap gap-2 text-xs"></div>
+          <p data-wb-service-summary class="text-[11px] text-muted-foreground">未选择服务时，创建下一个只会保留旧邮箱、不绑定服务。</p>
         </div>
       </div>
     </div>
@@ -192,6 +199,15 @@ const bootstrapJson = JSON.stringify({
           <div class="flex flex-wrap gap-2">
             <button type="button" data-wb-copy="both" class="h-9 px-3 rounded-full border text-xs hover:bg-accent">复制邮箱---密码</button>
             <button type="button" data-wb-refresh class="h-9 px-3 rounded-full border text-xs hover:bg-accent" disabled>刷新邮件</button>
+            <button
+              type="button"
+              data-wb-delete
+              class="h-9 px-3 rounded-full border border-destructive/40 text-destructive text-xs hover:bg-destructive/10 disabled:opacity-50"
+              disabled
+              title="立即删除当前临时邮箱"
+            >
+              删除邮箱
+            </button>
             <label class="inline-flex items-center gap-1.5 text-xs text-muted-foreground ml-auto">
               <input type="checkbox" data-wb-auto-refresh />
               自动刷新 (8s)
@@ -317,7 +333,19 @@ const bootstrapJson = JSON.stringify({
   function syncServicePanel(root: HTMLElement) {
     const panel = q<HTMLElement>(root, "[data-wb-service-panel]")
     if (!panel) return
-    panel.classList.toggle("hidden", getNextMode(root) !== "keep_with_services")
+    const show = getNextMode(root) === "keep_with_services"
+    panel.classList.toggle("hidden", !show)
+  }
+
+  function updateServiceSummary(root: HTMLElement, state: RootState) {
+    const el = q<HTMLElement>(root, "[data-wb-service-summary]")
+    if (!el) return
+    const n = state.selectedTemplateIds.size + state.customServices.length
+    if (n === 0) {
+      el.textContent = "未选择服务时，创建下一个只会保留旧邮箱、不绑定服务。"
+    } else {
+      el.textContent = `已选择 ${n} 个服务，创建下一个时将绑定到新邮箱。`
+    }
   }
 
   function persistUiState(root: HTMLElement, state: RootState) {
@@ -408,20 +436,26 @@ const bootstrapJson = JSON.stringify({
     const box = q<HTMLElement>(root, "[data-wb-templates]")
     if (!box) return
     if (!state.templates.length) {
-      box.innerHTML = '<span class="text-xs text-muted-foreground">暂无服务模板，可下方新建</span>'
+      box.innerHTML =
+        '<p class="p-3 text-xs text-muted-foreground">暂无服务模板。可在下方新建，或到 <a class="text-primary underline" href="/admin/services" target="_blank">服务管理</a> 添加。</p>'
+      updateServiceSummary(root, state)
       return
     }
     box.innerHTML = state.templates
       .map((t) => {
         const checked = state.selectedTemplateIds.has(t.id)
-        return `<label class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 cursor-pointer text-xs ${
-          checked ? "border-primary bg-primary/10" : "bg-background"
+        return `<label class="flex items-start gap-2.5 px-3 py-2.5 cursor-pointer hover:bg-muted/40 ${
+          checked ? "bg-primary/5" : ""
         }">
-          <input type="checkbox" data-wb-template-id="${escapeHtml(t.id)}" ${checked ? "checked" : ""} />
-          <span>${escapeHtml(t.name)}</span>
+          <input type="checkbox" data-wb-template-id="${escapeHtml(t.id)}" class="mt-0.5 size-4 shrink-0 accent-primary" ${checked ? "checked" : ""} />
+          <span class="min-w-0 flex-1">
+            <span class="text-sm font-medium block truncate">${escapeHtml(t.name)}</span>
+            <span class="text-[11px] text-muted-foreground block truncate">${escapeHtml(t.loginUrl || "")}</span>
+          </span>
         </label>`
       })
       .join("")
+    updateServiceSummary(root, state)
   }
 
   function renderCustoms(root: HTMLElement, state: RootState) {
@@ -429,6 +463,7 @@ const bootstrapJson = JSON.stringify({
     if (!box) return
     if (!state.customServices.length) {
       box.innerHTML = ""
+      updateServiceSummary(root, state)
       return
     }
     box.innerHTML = state.customServices
@@ -441,6 +476,7 @@ const bootstrapJson = JSON.stringify({
           </span>`
       )
       .join("")
+    updateServiceSummary(root, state)
   }
 
   async function autoCopyAfterCreate(root: HTMLElement, state: RootState) {
@@ -526,6 +562,8 @@ const bootstrapJson = JSON.stringify({
       if (passwordInput) passwordInput.value = state.currentPassword
       if (statusEl) statusEl.textContent = "已就绪"
       if (refreshBtn) refreshBtn.disabled = false
+      const deleteBtn = q<HTMLButtonElement>(root, "[data-wb-delete]")
+      if (deleteBtn) deleteBtn.disabled = false
       setOtpBar(root, state, null)
       const parts: string[] = []
       if (data.data.deletedPrevious) parts.push(`已删除上一邮箱 ${data.data.deletedPrevious}`)
@@ -570,11 +608,70 @@ const bootstrapJson = JSON.stringify({
       const passwordInput = q<HTMLInputElement>(other, "[data-wb-password]")
       const statusEl = q<HTMLElement>(other, "[data-wb-status]")
       const refreshBtn = q<HTMLButtonElement>(other, "[data-wb-refresh]")
+      const deleteBtn = q<HTMLButtonElement>(other, "[data-wb-delete]")
       if (emailInput) emailInput.value = state.currentAddress
       if (passwordInput) passwordInput.value = state.currentPassword
       if (statusEl) statusEl.textContent = state.currentAddress ? "已就绪" : "尚未创建"
       if (refreshBtn) refreshBtn.disabled = !state.currentAddress
+      if (deleteBtn) deleteBtn.disabled = !state.currentAddress
     })
+  }
+
+  function clearCurrentMailbox(root: HTMLElement, state: RootState) {
+    state.currentAddress = ""
+    state.currentPassword = ""
+    state.latestOtp = ""
+    stopPoll(root)
+    const emailInput = q<HTMLInputElement>(root, "[data-wb-email]")
+    const passwordInput = q<HTMLInputElement>(root, "[data-wb-password]")
+    const statusEl = q<HTMLElement>(root, "[data-wb-status]")
+    const refreshBtn = q<HTMLButtonElement>(root, "[data-wb-refresh]")
+    const deleteBtn = q<HTMLButtonElement>(root, "[data-wb-delete]")
+    const boundEl = q<HTMLElement>(root, "[data-wb-bound]")
+    const countEl = q<HTMLElement>(root, "[data-wb-email-count]")
+    const listEl = q<HTMLElement>(root, "[data-wb-email-list]")
+    const detailEl = q<HTMLElement>(root, "[data-wb-email-detail]")
+    if (emailInput) emailInput.value = ""
+    if (passwordInput) passwordInput.value = ""
+    if (statusEl) statusEl.textContent = "尚未创建"
+    if (refreshBtn) refreshBtn.disabled = true
+    if (deleteBtn) deleteBtn.disabled = true
+    if (boundEl) boundEl.textContent = ""
+    if (countEl) countEl.textContent = "0"
+    if (listEl) listEl.innerHTML = '<p class="p-6 text-sm text-muted-foreground text-center">创建邮箱后在此查看收件</p>'
+    if (detailEl) detailEl.innerHTML = "选择左侧邮件查看详情"
+    setOtpBar(root, state, null)
+    syncSiblingRoots(root, state)
+  }
+
+  async function deleteMailbox(root: HTMLElement) {
+    const state = states.get(root)
+    if (!state?.currentAddress) {
+      showAlert(root, "当前没有可删除的邮箱", "error")
+      return
+    }
+    const address = state.currentAddress
+    if (!confirm(`确定删除临时邮箱？\n${address}\n\n删除后不可恢复（回收站策略以系统为准）。`)) {
+      return
+    }
+    const deleteBtn = q<HTMLButtonElement>(root, "[data-wb-delete]")
+    if (deleteBtn) {
+      deleteBtn.disabled = true
+      deleteBtn.textContent = "删除中…"
+    }
+    try {
+      await api(state.apiBase, {
+        method: "POST",
+        body: JSON.stringify({ action: "delete", address }),
+      })
+      clearCurrentMailbox(root, state)
+      showAlert(root, `已删除 ${address}`)
+    } catch (e: any) {
+      showAlert(root, e.message || "删除失败", "error")
+      if (deleteBtn) deleteBtn.disabled = !state.currentAddress
+    } finally {
+      if (deleteBtn) deleteBtn.textContent = "删除邮箱"
+    }
   }
 
   async function refreshEmails(root: HTMLElement) {
@@ -719,6 +816,12 @@ const bootstrapJson = JSON.stringify({
     }
     states.set(root, state)
 
+    // Unique radio group name per dual-slot clone so only one option is selected per root
+    const radioName = `wb-next-mode-${Math.random().toString(36).slice(2, 9)}`
+    root.querySelectorAll<HTMLInputElement>("[data-wb-next-mode]").forEach((input) => {
+      input.name = radioName
+    })
+
     // Prefer SSR domain options; apply saved domain if present
     const domainEl = q<HTMLSelectElement>(root, "[data-wb-domain]")
     if (domainEl && prefs.domain) {
@@ -802,6 +905,17 @@ const bootstrapJson = JSON.stringify({
       if (root) {
         initRoot(root)
         refreshEmails(root)
+      }
+      return
+    }
+
+    const deleteBtn = target.closest("[data-wb-delete]") as HTMLElement | null
+    if (deleteBtn) {
+      e.preventDefault()
+      const root = deleteBtn.closest("[data-wb-root]") as HTMLElement | null
+      if (root) {
+        initRoot(root)
+        deleteMailbox(root)
       }
       return
     }
@@ -911,7 +1025,16 @@ const bootstrapJson = JSON.stringify({
     const state = states.get(root)!
 
     if (target.matches("[data-wb-next-mode]")) {
-      syncServicePanel(root)
+      // Enforce single selection within this root (defensive; name should handle it)
+      const mode = (target as HTMLInputElement).value
+      setNextMode(root, mode)
+      // Mirror mode to sibling clone (desktop/mobile dual slot)
+      document.querySelectorAll<HTMLElement>("[data-wb-root]").forEach((other) => {
+        if (other === root) return
+        setNextMode(other, mode)
+        const otherState = states.get(other)
+        if (otherState) persistUiState(other, otherState)
+      })
       persistUiState(root, state)
       return
     }

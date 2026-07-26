@@ -1,26 +1,30 @@
 import type { APIRoute } from "astro"
-import { createDB, getMailDomain, getMailDomains } from "database"
-import { authenticateApiKey, unauthorizedResponse } from "../../../../../lib/api-auth"
+import { getMailDomain, getMailDomains } from "database"
+import { requireApiV1Key, apiV1Json, apiV1OptionsRoute } from "../../../../../lib/api-v1"
 
+export const OPTIONS = apiV1OptionsRoute
+
+/**
+ * GET /api/v1/admin/mailbox/domains
+ */
 export const GET: APIRoute = async (context) => {
-  if (!await authenticateApiKey(context)) {
-    return unauthorizedResponse()
+  const auth = await requireApiV1Key(context)
+  if (!auth) return apiV1Json({ success: false, error: "Unauthorized" }, 401)
+
+  const envMailDomain = (context.locals.runtime.env.MAIL_DOMAIN || "").trim()
+  let defaultDomain = await getMailDomain(auth.db)
+  let domains = await getMailDomains(auth.db)
+  if (!domains.length && defaultDomain) domains = [defaultDomain]
+  if ((!domains.length || domains.every((d) => d === "example.com")) && envMailDomain) {
+    domains = [envMailDomain, ...domains.filter((d) => d !== "example.com" && d !== envMailDomain)]
+    if (!defaultDomain || defaultDomain === "example.com") defaultDomain = envMailDomain
   }
 
-  const db = createDB(context.locals.runtime.env.DB)
-  const [defaultDomain, domains] = await Promise.all([
-    getMailDomain(db),
-    getMailDomains(db)
-  ])
-
-  return new Response(JSON.stringify({
+  return apiV1Json({
     success: true,
     data: {
       default_domain: defaultDomain,
-      domains
-    }
-  }), {
-    status: 200,
-    headers: { "Content-Type": "application/json" }
+      domains,
+    },
   })
 }

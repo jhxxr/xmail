@@ -1,7 +1,5 @@
 import type { APIRoute } from "astro"
 import {
-  createDB,
-  getAdminById,
   getMailDomain,
   getMailDomains,
   getMailbox,
@@ -17,33 +15,16 @@ import {
   createLog,
   markEmailAsRead,
 } from "database"
-import { verifyToken } from "../../../lib/auth"
-import { buildRandomAddress } from "../../../lib/random-mailbox"
-import { extractVerificationCode, extractPreview } from "../../../lib/utils"
-import { sanitizeEmailHtml } from "../../../lib/email-html"
+import { requireApiV1Key, apiV1Json, apiV1OptionsRoute } from "../../../../lib/api-v1"
+import { buildRandomAddress } from "../../../../lib/random-mailbox"
+import { extractVerificationCode, extractPreview } from "../../../../lib/utils"
+import { sanitizeEmailHtml } from "../../../../lib/email-html"
 
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  })
-}
-
-async function requireAdmin(context: Parameters<APIRoute>[0]) {
-  const jwtSecret = context.locals.runtime.env.JWT_SECRET
-  const token = context.cookies.get("admin_token")?.value
-  if (!token) return null
-  const payload = await verifyToken(token, jwtSecret)
-  if (!payload || payload.type !== "admin") return null
-  const db = createDB(context.locals.runtime.env.DB)
-  const admin = await getAdminById(db, payload.id)
-  if (!admin) return null
-  return { db, admin }
-}
+export const OPTIONS = apiV1OptionsRoute
 
 export const GET: APIRoute = async (context) => {
-  const auth = await requireAdmin(context)
-  if (!auth) return json({ success: false, error: "Unauthorized" }, 401)
+  const auth = await requireApiV1Key(context)
+  if (!auth) return apiV1Json({ success: false, error: "Unauthorized" }, 401)
 
   const url = new URL(context.request.url)
   const action = url.searchParams.get("action") || "bootstrap"
@@ -58,7 +39,7 @@ export const GET: APIRoute = async (context) => {
       if (!defaultDomain || defaultDomain === "example.com") defaultDomain = envMailDomain
     }
     const templates = await listServiceTemplates(auth.db)
-    return json({
+    return apiV1Json({
       success: true,
       data: {
         defaultDomain,
@@ -75,10 +56,10 @@ export const GET: APIRoute = async (context) => {
 
   if (action === "emails") {
     const mailbox = (url.searchParams.get("mailbox") || "").toLowerCase().trim()
-    if (!mailbox) return json({ success: false, error: "Missing mailbox" }, 400)
+    if (!mailbox) return apiV1Json({ success: false, error: "Missing mailbox" }, 400)
     const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") || "30", 10), 1), 100)
     const emails = await getEmailsByMailbox(auth.db, mailbox, { limit })
-    return json({
+    return apiV1Json({
       success: true,
       data: {
         mailbox,
@@ -104,16 +85,16 @@ export const GET: APIRoute = async (context) => {
 
   if (action === "email") {
     const id = url.searchParams.get("id") || ""
-    if (!id) return json({ success: false, error: "Missing id" }, 400)
+    if (!id) return apiV1Json({ success: false, error: "Missing id" }, 400)
     const email = await getEmail(auth.db, id)
-    if (!email) return json({ success: false, error: "Not found" }, 404)
+    if (!email) return apiV1Json({ success: false, error: "Not found" }, 404)
     if (!email.isRead) {
       await markEmailAsRead(auth.db, id)
     }
     const code =
       extractVerificationCode(email.text, email.html) ||
       extractVerificationCode(email.subject, null)
-    return json({
+    return apiV1Json({
       success: true,
       data: {
         id: email.id,
@@ -129,7 +110,7 @@ export const GET: APIRoute = async (context) => {
     })
   }
 
-  return json({ success: false, error: "Unknown action" }, 400)
+  return apiV1Json({ success: false, error: "Unknown action" }, 400)
 }
 
 type CreateBody = {
@@ -140,34 +121,37 @@ type CreateBody = {
   serviceTemplateIds?: string[]
   customServices?: Array<{ name?: string; loginUrl?: string; note?: string; saveAsTemplate?: boolean }>
   note?: string
+  name?: string
+  loginUrl?: string
+  address?: string
 }
 
 export const POST: APIRoute = async (context) => {
-  const auth = await requireAdmin(context)
-  if (!auth) return json({ success: false, error: "Unauthorized" }, 401)
+  const auth = await requireApiV1Key(context)
+  if (!auth) return apiV1Json({ success: false, error: "Unauthorized" }, 401)
 
   let body: CreateBody = {}
   try {
     body = (await context.request.json()) as CreateBody
   } catch {
-    return json({ success: false, error: "Invalid JSON" }, 400)
+    return apiV1Json({ success: false, error: "Invalid JSON" }, 400)
   }
 
   const action = body.action || "create"
 
   if (action === "create_template") {
-    const name = (body as any).name?.toString()?.trim()
-    const loginUrl = (body as any).loginUrl?.toString()?.trim()
-    const note = (body as any).note?.toString()?.trim()
+    const name = body.name?.toString()?.trim()
+    const loginUrl = body.loginUrl?.toString()?.trim()
+    const note = body.note?.toString()?.trim()
     if (!name || !loginUrl) {
-      return json({ success: false, error: "name and loginUrl required" }, 400)
+      return apiV1Json({ success: false, error: "name and loginUrl required" }, 400)
     }
     const template = await createServiceTemplate(auth.db, {
       name,
       loginUrl,
       note: note || undefined,
     })
-    return json({
+    return apiV1Json({
       success: true,
       data: {
         id: template.id,
@@ -179,31 +163,22 @@ export const POST: APIRoute = async (context) => {
   }
 
   if (action === "delete") {
-    const address = (
-      body.previousAddress ||
-      (body as any).address ||
-      (body as any).mailbox ||
-      ""
-    )
-      .toString()
-      .toLowerCase()
-      .trim()
-    if (!address) return json({ success: false, error: "Missing address" }, 400)
+    const address = (body.previousAddress || body.address || "").toString().toLowerCase().trim()
+    if (!address) return apiV1Json({ success: false, error: "Missing address" }, 400)
     const existing = await getMailbox(auth.db, address)
-    if (!existing) return json({ success: false, error: "Not found" }, 404)
-    await deleteMailbox(auth.db, address, auth.admin.id)
+    if (!existing) return apiV1Json({ success: false, error: "Not found" }, 404)
+    await deleteMailbox(auth.db, address)
     await createLog(auth.db, {
-      adminId: auth.admin.id,
       action: "temp_workbench_delete",
       target: address,
-      details: { via: "admin_ui" },
+      details: { via: "api_key", keyId: auth.apiKey.id },
       ip: context.request.headers.get("cf-connecting-ip") || undefined,
     })
-    return json({ success: true, data: { deleted: address } })
+    return apiV1Json({ success: true, data: { deleted: address } })
   }
 
   if (action !== "create") {
-    return json({ success: false, error: "Unknown action" }, 400)
+    return apiV1Json({ success: false, error: "Unknown action" }, 400)
   }
 
   const envMailDomain = (context.locals.runtime.env.MAIL_DOMAIN || "").trim().toLowerCase()
@@ -211,34 +186,28 @@ export const POST: APIRoute = async (context) => {
     getMailDomain(auth.db),
     getMailDomains(auth.db),
   ])
-  const allowedDomains = [
-    ...allowedFromDb,
-    defaultDomain,
-    envMailDomain,
-  ]
+  const allowedDomains = [...allowedFromDb, defaultDomain, envMailDomain]
     .map((d) => d.toLowerCase().trim())
     .filter(Boolean)
   const uniqueAllowed = [...new Set(allowedDomains)]
   const domain = (body.domain || defaultDomain || envMailDomain || "").toLowerCase().trim()
-  if (!domain) return json({ success: false, error: "Missing domain" }, 400)
+  if (!domain) return apiV1Json({ success: false, error: "Missing domain" }, 400)
   if (uniqueAllowed.length > 0 && !uniqueAllowed.includes(domain)) {
-    return json({ success: false, error: "Invalid domain" }, 400)
+    return apiV1Json({ success: false, error: "Invalid domain" }, 400)
   }
 
   const nextMode = body.nextMode || "none"
   const previousAddress = (body.previousAddress || "").toLowerCase().trim() || null
 
-  // Mutually exclusive post-use modes applied when creating the next mailbox
   let deletedPrevious: string | null = null
   if (nextMode === "auto_delete" && previousAddress) {
     const prev = await getMailbox(auth.db, previousAddress)
     if (prev) {
-      await deleteMailbox(auth.db, previousAddress, auth.admin.id)
+      await deleteMailbox(auth.db, previousAddress)
       deletedPrevious = previousAddress
     }
   }
 
-  // Create unique random address
   let address = ""
   for (let attempt = 0; attempt < 20; attempt++) {
     const candidate = buildRandomAddress(domain)
@@ -254,8 +223,7 @@ export const POST: APIRoute = async (context) => {
 
   try {
     const { mailbox, password } = await createMailbox(auth.db, address, {
-      note: body.note || "temp-workbench",
-      createdBy: auth.admin.id,
+      note: body.note || "temp-workbench-extension",
     })
 
     const boundServices: Array<{ name: string; loginUrl: string; kind: string }> = []
@@ -300,21 +268,21 @@ export const POST: APIRoute = async (context) => {
     }
 
     await createLog(auth.db, {
-      adminId: auth.admin.id,
       action: "temp_workbench_create",
       target: mailbox.address,
       details: {
         nextMode,
         deletedPrevious,
         boundServices: boundServices.length,
+        via: "api_key",
+        keyId: auth.apiKey.id,
       },
       ip: context.request.headers.get("cf-connecting-ip") || undefined,
     })
 
-    // Prefer returned password; also verify plain password readable
     const plain = password || (await getMailboxPlainPassword(auth.db, mailbox.address)) || ""
 
-    return json({
+    return apiV1Json({
       success: true,
       data: {
         address: mailbox.address,
@@ -328,9 +296,9 @@ export const POST: APIRoute = async (context) => {
     const message = error?.message || "Create failed"
     const lowered = String(message).toLowerCase()
     if (lowered.includes("unique") || lowered.includes("constraint")) {
-      return json({ success: false, error: "Mailbox already exists, retry" }, 409)
+      return apiV1Json({ success: false, error: "Mailbox already exists, retry" }, 409)
     }
-    console.error("temp workbench create error:", error)
-    return json({ success: false, error: "Internal server error" }, 500)
+    console.error("temp workbench API create error:", error)
+    return apiV1Json({ success: false, error: "Internal server error" }, 500)
   }
 }
